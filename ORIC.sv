@@ -132,6 +132,8 @@ wire [1:0] scale = status[3:2];
 parameter CONF_STR = {
 	"Oric;;",
 	"-;",
+	"F,TAP,Load Tape;",
+
 //	"S,VHD;",
 //	"OC,Autostart,Yes,No;",
 	"-;",
@@ -274,6 +276,8 @@ ORIC ORIC
 	.O_VSYNC(vs),
 	.O_HBLANK(hblank),
 	.O_VBLANK(vblank),
+	
+	.I_CPU_ENABLED(~f_cpu_enabld),
 
 	.K7_TAPEIN(1'b0),
 	.K7_TAPEOUT()
@@ -290,6 +294,10 @@ assign AUDIO_S = status[4] ? 0 : 0;
 
 wire hs, vs, hblank, vblank, ce_pix, clk_sel;
 wire [3:0] r,g,b;
+
+reg f_cpu_enabld;
+
+//always @(posedge clk_sys) f_cpu_enabld = 1;
 
 assign CLK_VIDEO = clk_24;
 video_mixer #(640, 1) mixer
