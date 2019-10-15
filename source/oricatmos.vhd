@@ -43,13 +43,13 @@ port (
    O_VSYNC             : out   std_logic;
    O_HBLANK            : out   std_logic;
    O_VBLANK            : out   std_logic;
+	
+	mister_status       : in    std_logic_vector (10 downto 0);
 
    -- HDMI video output
 -- TMDS_P      : out   std_logic_vector(3 downto 0);
 -- TMDS_N      : out   std_logic_vector(3 downto 0);
 
-
-   I_CPU_ENABLED        : in std_logic;
 
    -- K7 connector
    K7_TAPEIN         : in    std_logic;
@@ -169,7 +169,7 @@ architecture RTL of ORIC is
    signal s_blank            : std_logic;
    
    signal break              : std_logic;
-   signal cpu_enabled        : std_logic;
+   signal cpu_enabled        : std_logic := '1';
 
 
 component keyboard port (
@@ -195,9 +195,14 @@ begin
    -- Reset
    loc_reset_n <= I_RESET;
    
-   cpu_enabled <= I_CPU_ENABLED;
-   
-   
+  -- cpu_enabled <= I_CPU_ENABLED;
+    
+   cpu_enabledment_process : process(clk24) begin
+		 if rising_edge(clk24) then
+				if mister_status(4)='1' then cpu_enabled <= '0'; end if;
+				if mister_status(5)='1' then cpu_enabled <= '1'; end if;
+			end if;	
+		end process;
 --------------------------------------------------
    O_VIDEO_R  <= VideoR;
    O_VIDEO_G  <= VideoG;
@@ -493,17 +498,13 @@ begin
       wait until rising_edge(clk24);
 
       -- expansion port
-      if    cpu_rw = '1' and ula_IOCONTROL = '1' and ula_CSIOn  = '0'                       then
-         CPU_DI <= SRAM_DO;
+      if    cpu_rw = '1' and ula_IOCONTROL = '1' and ula_CSIOn  = '0'  then CPU_DI <= SRAM_DO;
       -- Via
-      elsif cpu_rw = '1' and ula_IOCONTROL = '0' and ula_CSIOn  = '0' and ula_LE_SRAM = '0' then
-         CPU_DI <= VIA_DO;
+      elsif cpu_rw = '1' and ula_IOCONTROL = '0' and ula_CSIOn  = '0' and ula_LE_SRAM = '0' then CPU_DI <= VIA_DO;
       -- ROM
-      elsif cpu_rw = '1' and ula_IOCONTROL = '0' and ula_CSROMn = '0'                       then
-         CPU_DI <= ROM_DO;
+      elsif cpu_rw = '1' and ula_IOCONTROL = '0' and ula_CSROMn = '0'                       then CPU_DI <= ROM_DO;
       -- Read data
-      elsif cpu_rw = '1' and ula_IOCONTROL = '0' and ula_phi2   = '1' and ula_LE_SRAM = '0' then
-         cpu_di <= SRAM_DO;
+      elsif cpu_rw = '1' and ula_IOCONTROL = '0' and ula_phi2   = '1' and ula_LE_SRAM = '0' then cpu_di <= SRAM_DO;
       end if;
    end process;
 
