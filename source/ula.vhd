@@ -96,6 +96,8 @@ port (
 	SRAM_CE    :   out std_logic;
 	SRAM_WE    :   out std_logic;
 	LATCH_SRAM :   out std_logic;
+	
+	ULA_ENABLED : in std_logic; 
 
 	-- DRAM
 --	AD_RAM     :   out std_logic_vector( 7 downto 0); -- ADDRESS BUS for dynamic ram  -- pin 38,36,37,4,3,2,40,39
@@ -201,6 +203,8 @@ architecture RTL of ula is
 	signal lInv_hold    : std_logic;                    -- inverse signal hold
 	signal lBGFG_SEL    : std_logic;
 	signal lFLASH_SEL   : std_logic;
+	signal l_enabled    : std_logic;
+	
 
 begin
 
@@ -219,11 +223,12 @@ begin
 	CSROMn       <= CSROMn_INT;
 	CSRAMn       <= CSRAMn_INT;
 	CLK_4        <= CLK_4_INT;
+	l_enabled    <= ULA_ENABLED;
 
 	------------------
 	-- SRAM signals --
 	------------------
-	SRAM_AD    <= AD_RAM_INT;
+	SRAM_AD    <= AD_RAM_INT when ULA_ENABLED='1' else "ZZZZZZZZZZZZZZZZ";
 	LATCH_SRAM <= not c(4) and not c(12) and not c(20);
 
 	--            phase 1  phase 2  phase 3

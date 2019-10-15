@@ -92,6 +92,11 @@ architecture RTL of ORIC is
    signal clkout5            : std_logic := '0';
    signal pll_locked         : std_logic := '0';
 
+	
+	-- RAM
+	signal RAM_DATA_TO_WRITE   : std_logic_vector( 7 downto 0);
+	signal RAM_WE					: std_logic;
+	
    -- cpu
    signal CPU_ADDR           : std_logic_vector(23 downto 0);
    signal CPU_DI             : std_logic_vector( 7 downto 0);
@@ -169,7 +174,17 @@ architecture RTL of ORIC is
    signal s_blank            : std_logic;
    
    signal break              : std_logic;
-   signal cpu_enabled        : std_logic := '1';
+
+	signal cpu_enabled        : std_logic := '1';
+	signal loc_ioctl_download : std_logic := '0';
+	signal has_data_to_write  : std_logic := '0';
+	signal tap_data_address   : std_logic_vector (15 downto 0)  := x"BB80";
+	signal tap_data           : std_logic_vector (7 downto 0);
+	
+	signal temp					  : std_logic := '0';
+	signal data_sent			  : std_logic := '0';
+   signal data_written		  : std_logic := '0';
+	
 
 
 component keyboard port (
@@ -186,6 +201,11 @@ component keyboard port (
    );
 end component;
 
+
+
+
+
+
 begin
    ------------------------------------------------
    
@@ -194,14 +214,43 @@ begin
 
    -- Reset
    loc_reset_n <= I_RESET;
-   
     
-   cpu_enabledment_process : process(clk24) begin
-		 if rising_edge(clk24) then
-				if mister_status(4)='1' then cpu_enabled <= '0'; end if;
-				if mister_status(5)='1' then cpu_enabled <= '1'; end if;
-			end if;	
-		end process;
+	temp <= mister_status(6);
+
+	data_write: process begin
+		wait until rising_edge(ula_phi2);
+		if (temp = '1' and data_sent = '0' and has_data_to_write='0') then
+--			loc_ioctl_download <= '1';
+			cpu_enabled <= '0';
+			has_data_to_write <= '1';
+		end if;
+		if has_data_to_write <= '1' and cpu_enabled <= '0' and cpu_rw = '1' then
+			tap_data_address <= x"BB80";
+			tap_data <= x"41";
+			data_sent <= '1';
+			has_data_to_write <='0';
+		end if;
+		if data_sent = '1' then
+--			loc_ioctl_download <= '0';
+			data_sent <= '0';
+			cpu_enabled <= '1';
+			--tap_data_address <= tap_data_address + 1;
+		end if;
+	end process;
+	 
+	 
+
+
+    
+--   cpu_enablement_process : process(clk24, loc_ioctl_download) begin
+--		 if rising_edge(clk24) then
+--				if loc_ioctl_download = '1' then cpU_enabled <= '0'; else cpu_enabled <= '1'; end if;
+--				if mister_status(4)='1' then cpu_enabled <= '0'; end if;
+--				if mister_status(5)='1' then cpu_enabled <= '1'; end if;
+--				
+--			end if;	
+--			
+--		end process;
 --------------------------------------------------
    O_VIDEO_R  <= VideoR;
    O_VIDEO_G  <= VideoG;
@@ -252,7 +301,8 @@ begin
    ------------------------------------------------------------
    -- STATIC RAM
    ------------------------------------------------------------
-   ad(15 downto 0)  <= ula_AD_SRAM when ula_phi2 = '0' else CPU_ADDR(15 downto 0);
+   ad(15 downto 0)  <= tap_data_address when has_data_to_write = '1'  else
+								ula_AD_SRAM when ula_phi2 = '0' else CPU_ADDR(15 downto 0);
 -- ad(17 downto 16) <= "00";
 
    inst_ram : entity work.ram48k
@@ -260,9 +310,9 @@ begin
       clock  => clk24,
 --    cs   => ula_CE_SRAM,
       rden   => ula_OE_SRAM,
-      wren   => ula_WE_SRAM,
+      wren   => RAM_WE,
       address => ad,
-      data   => CPU_DO,
+      data   => RAM_DATA_TO_WRITE,
       q   => SRAM_DO
    );
 
@@ -300,6 +350,8 @@ begin
       SRAM_WE    => ula_WE_SRAM,
       LATCH_SRAM => ula_LE_SRAM,
 
+		ULA_ENABLED => cpu_enabled,
+		
       -- CPU Clock
       PHI2       => ula_PHI2,
 
@@ -505,6 +557,20 @@ begin
       -- Read data
       elsif cpu_rw = '1' and ula_IOCONTROL = '0' and ula_phi2   = '1' and ula_LE_SRAM = '0' then cpu_di <= SRAM_DO;
       end if;
+		
+		if (has_data_to_write = '1' and cpu_rw = '1' and data_written = '0') then
+				RAM_WE <= '1';
+				RAM_DATA_TO_WRITE <= tap_data;
+				data_written <= '1';
+				
+			else 
+				RAM_DATA_TO_WRITE <= CPU_DO;
+				RAM_WE <= ula_WE_SRAM;
+				data_written <= '0';
+		end if;
+		
+		
+		
    end process;
 
    ------------------------------------------------------------
