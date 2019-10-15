@@ -43,7 +43,7 @@ port (
    O_VSYNC             : out   std_logic;
    O_HBLANK            : out   std_logic;
    O_VBLANK            : out   std_logic;
-	
+
 	mister_status       : in    std_logic_vector (10 downto 0);
 
    -- HDMI video output
@@ -195,7 +195,6 @@ begin
    -- Reset
    loc_reset_n <= I_RESET;
    
-  -- cpu_enabled <= I_CPU_ENABLED;
     
    cpu_enabledment_process : process(clk24) begin
 		 if rising_edge(clk24) then
