@@ -508,7 +508,7 @@ oricatmos oricatmos
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
 	.sd_din_strobe    (0),
-	.cpu_halt         (cpu_halt)
+	.cpu_halt         (cpu_halt | OSD_STATUS)
 );
 
 
