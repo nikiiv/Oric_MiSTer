@@ -212,8 +212,11 @@ video_freak video_freak
 `include "build_id.v"
 localparam CONF_STR = {
 	"Oric;;",
-	"F1,TAP,Load TAP file;",	
+	"F1,TAP,Load TAP file;",
 	"h0T[53],Rewind Tape;",
+	"-;",
+	"T[60],Halt CPU;",
+	"T[61],Resume CPU;",
 	"-;",
 	"S0,DSK,Mount Drive A:;",
 	"S1,DSK,Mount Drive B:;",
@@ -255,6 +258,18 @@ wire [1:0] tapeVolume  = status[51:50];
 wire       tapeUseADC = status[52];
 wire       tapeRewind = status[53];
 wire [1:0] joystick_adapter = status[55:54];
+
+reg cpu_halt = 0;
+reg halt_btn_d, resume_btn_d;
+always @(posedge clk_sys) begin
+	halt_btn_d   <= status[60];
+	resume_btn_d <= status[61];
+	if (reset) cpu_halt <= 0;
+	else begin
+		if (status[60] ^ halt_btn_d)   cpu_halt <= 1;
+		if (status[61] ^ resume_btn_d) cpu_halt <= 0;
+	end
+end
 
 ///////////////////////////////////////////////////
 
@@ -492,7 +507,8 @@ oricatmos oricatmos
 	.sd_din_fd2       (sd_buff_din[2]),
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
-	.sd_din_strobe    (0)
+	.sd_din_strobe    (0),
+	.cpu_halt         (cpu_halt)
 );
 
 

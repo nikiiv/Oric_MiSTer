@@ -105,7 +105,8 @@ ENTITY oricatmos IS
 		sd_din_fd2 : OUT STD_LOGIC_VECTOR (7 DOWNTO 0);
 		sd_din_fd3 : OUT STD_LOGIC_VECTOR (7 DOWNTO 0);
 		sd_dout_strobe : IN STD_LOGIC;
-		sd_din_strobe : IN STD_LOGIC
+		sd_din_strobe : IN STD_LOGIC;
+		cpu_halt : IN STD_LOGIC
 	);
 END;
 
@@ -263,7 +264,7 @@ BEGIN
 			Res_n => cont_RESETn,
 			Enable => ENA_1MHZ,
 			Clk => CLK_IN,
-			Rdy => '1',
+			Rdy => NOT cpu_halt,
 			Abort_n => '1',
 			IRQ_n => cpu_irq AND cont_irq, -- Via and disk controller
 			NMI_n => KEYB_NMIn,
