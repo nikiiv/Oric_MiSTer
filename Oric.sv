@@ -213,6 +213,7 @@ video_freak video_freak
 localparam CONF_STR = {
 	"Oric;;",
 	"F1,TAP,Load TAP file;",
+	"F3,TAP,Load TAP via DMA;",
 	"h0T[53],Rewind Tape;",
 	"-;",
 	"T[60],Halt CPU;",
@@ -427,6 +428,11 @@ always @(posedge clk_sys) begin
 		spram_addr <= clr_addr[15:0];
 		spram_we <= 1'b1;
 	end
+	else if (dma_active) begin
+		spram_d <= dma_data;
+		spram_addr <= dma_addr;
+		spram_we <= dma_we;
+	end
 	else begin
 		spram_d <= ram_d;
 		spram_addr <= ram_ad;
@@ -508,7 +514,7 @@ oricatmos oricatmos
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
 	.sd_din_strobe    (0),
-	.cpu_halt         (cpu_halt | OSD_STATUS)
+	.cpu_halt         (cpu_halt | OSD_STATUS | dma_active)
 );
 
 
@@ -589,7 +595,9 @@ assign AUDIO_R = (stereo == 2'b00) ? {1'b0,psg_out+tapeAudio,1'b0} : (stereo == 
 wire casdout;
 wire cas_relay;
 
-wire        load_tape = ioctl_index==1;
+wire        load_tape     = ioctl_index==1;
+wire        load_tape_dma = ioctl_index==3;
+wire        any_tape_load = load_tape | load_tape_dma;
 reg  [15:0] tape_end;
 reg         tape_loaded = 1'b0;
 reg         ioctl_downlD;
@@ -597,18 +605,26 @@ reg         ioctl_downlD;
 wire [15:0] tape_addr;
 wire [7:0]  tape_data;
 
+reg  [15:0] dma_cache_addr;
+reg         dma_active;
+reg  [15:0] dma_addr;
+reg  [7:0]  dma_data;
+reg         dma_we;
+
 spram #(.address_width(16)) tapecache (
   .clock(clk_sys),
 
-  .address((ioctl_index == 1 && ioctl_download) ? ioctl_addr: tape_addr),
+  .address((ioctl_download && any_tape_load) ? ioctl_addr :
+           dma_active                        ? dma_cache_addr :
+                                               tape_addr),
   .data(ioctl_dout),
-  .wren(ioctl_wr && load_tape),
+  .wren(ioctl_wr && any_tape_load),
   .q(tape_data)
 );
 
 
 always @(posedge clk_sys) begin
- if (load_tape) tape_end <= ioctl_addr[15:0];
+ if (any_tape_load) tape_end <= ioctl_addr[15:0];
 end
 
 always @(posedge clk_sys) begin
@@ -620,14 +636,151 @@ end
 cassette cassette (
   .clk(clk_sys),
   .reset(reset),
-  .rewind(tapeRewind | (load_tape && ioctl_download)),
-  .en(cas_relay && tape_loaded && ~tapeUseADC), 
+  .rewind(tapeRewind | (any_tape_load && ioctl_download)),
+  .en(cas_relay && tape_loaded && ~tapeUseADC),
   .tape_addr(tape_addr),
   .tape_data(tape_data),
 
   .tape_end(tape_end),
   .data(casdout)
 );
+
+// ---- DMA TAP loader ----
+// Triggered on falling edge of ioctl_download with ioctl_index==3.
+// Parses TAP header in the tapecache (sync 0x16 + marker 0x24, then 9-byte
+// header: type@+2, end@+4/+5 big-endian, start@+6/+7 big-endian, +8 sep,
+// then null-terminated filename), then copies the program data into main
+// RAM via the spram mux. For BASIC (type 0x80) writes end+1 to ZP $9A..$9F
+// so LIST sees an end-of-program/start-of-vars consistent with the load.
+
+localparam D_IDLE   = 4'd0,
+           D_INIT   = 4'd1,
+           D_SCAN   = 4'd2,
+           D_WRITE  = 4'd3,
+           D_PATCH  = 4'd4,
+           D_DRAIN  = 4'd5,
+           D_DONE   = 4'd6;
+
+reg  [3:0]  dma_state;
+reg  [15:0] dma_bot_seg;
+reg         dma_eos;
+reg         dma_name_done;
+reg  [15:0] dma_data_start;
+reg  [15:0] dma_data_end;
+reg  [15:0] dma_write_addr;
+reg  [2:0]  dma_patch_step;
+reg  [1:0]  dma_drain_cnt;
+
+wire [15:0] dma_end_plus_1 = dma_data_end + 16'd1;
+wire        dma_trigger    = ioctl_downlD && ~ioctl_download && load_tape_dma;
+
+always @(posedge clk_sys) begin
+	if (reset) begin
+		dma_state      <= D_IDLE;
+		dma_active     <= 1'b0;
+		dma_we         <= 1'b0;
+		dma_eos        <= 1'b0;
+		dma_name_done  <= 1'b0;
+	end
+	else begin
+		dma_we <= 1'b0;
+		case (dma_state)
+			D_IDLE: begin
+				if (dma_trigger) begin
+					dma_state      <= D_INIT;
+					dma_active     <= 1'b1;
+					dma_cache_addr <= 16'd0;
+					dma_bot_seg    <= 16'd0;
+					dma_eos        <= 1'b0;
+					dma_name_done  <= 1'b0;
+				end
+			end
+
+			// Prime the read pipeline: cache_rd_addr will be 1 next cycle so
+			// tape_data corresponds to mem[0] when D_SCAN starts running.
+			D_INIT: begin
+				dma_cache_addr <= dma_cache_addr + 16'd1;
+				dma_state      <= D_SCAN;
+			end
+
+			// Scan for sync marker, then capture header fields by offset.
+			// tape_data at this cycle = mem[dma_cache_addr - 1].
+			D_SCAN: begin
+				dma_cache_addr <= dma_cache_addr + 16'd1;
+				if (!dma_eos) begin
+					if (tape_data == 8'h24) begin
+						dma_eos     <= 1'b1;
+						dma_bot_seg <= dma_cache_addr; // first byte after 0x24
+					end
+				end
+				else begin
+					if (dma_cache_addr - 16'd1 == dma_bot_seg + 16'd4) dma_data_end[15:8]   <= tape_data;
+					if (dma_cache_addr - 16'd1 == dma_bot_seg + 16'd5) dma_data_end[7:0]    <= tape_data;
+					if (dma_cache_addr - 16'd1 == dma_bot_seg + 16'd6) dma_data_start[15:8] <= tape_data;
+					if (dma_cache_addr - 16'd1 == dma_bot_seg + 16'd7) dma_data_start[7:0]  <= tape_data;
+					if (dma_cache_addr - 16'd1 >= dma_bot_seg + 16'd9 && !dma_name_done) begin
+						if (tape_data == 8'h00) begin
+							dma_name_done  <= 1'b1;
+							dma_write_addr <= dma_data_start;
+							dma_state      <= D_WRITE;
+						end
+					end
+				end
+			end
+
+			// Stream bytes from cache to main RAM.
+			// On entry: next-cycle tape_data is the first program byte.
+			D_WRITE: begin
+				dma_cache_addr <= dma_cache_addr + 16'd1;
+				dma_we         <= 1'b1;
+				dma_addr       <= dma_write_addr;
+				dma_data       <= tape_data;
+				dma_write_addr <= dma_write_addr + 16'd1;
+				if (dma_write_addr == dma_data_end) begin
+					dma_patch_step <= 3'd0;
+					dma_state      <= D_PATCH;
+				end
+			end
+
+			// BASIC: write end+1 to VARTAB($9C/$9D), ARYTAB($9E/$9F),
+			// STREND($A0/$A1). Discovered empirically: on a fresh Atmos boot
+			// all three hold 1283 ($0503) and advance together as the user
+			// types lines, so collapsing them all to end+1 mirrors real load.
+			D_PATCH: begin
+				dma_we <= 1'b1;
+				case (dma_patch_step)
+					3'd0: begin dma_addr <= 16'h009C; dma_data <= dma_end_plus_1[7:0];  end
+					3'd1: begin dma_addr <= 16'h009D; dma_data <= dma_end_plus_1[15:8]; end
+					3'd2: begin dma_addr <= 16'h009E; dma_data <= dma_end_plus_1[7:0];  end
+					3'd3: begin dma_addr <= 16'h009F; dma_data <= dma_end_plus_1[15:8]; end
+					3'd4: begin dma_addr <= 16'h00A0; dma_data <= dma_end_plus_1[7:0];  end
+					3'd5: begin dma_addr <= 16'h00A1; dma_data <= dma_end_plus_1[15:8]; end
+					default: ;
+				endcase
+				dma_patch_step <= dma_patch_step + 3'd1;
+				if (dma_patch_step == 3'd5) begin
+					dma_drain_cnt <= 2'd0;
+					dma_state     <= D_DRAIN;
+				end
+			end
+
+			// Hold dma_active for a few cycles so the last write commits
+			// through the spram_addr mux + spram register pipeline before
+			// the CPU comes off halt.
+			D_DRAIN: begin
+				dma_drain_cnt <= dma_drain_cnt + 2'd1;
+				if (dma_drain_cnt == 2'd3) dma_state <= D_DONE;
+			end
+
+			D_DONE: begin
+				dma_active <= 1'b0;
+				dma_state  <= D_IDLE;
+			end
+
+			default: dma_state <= D_IDLE;
+		endcase
+	end
+end
 
 ///////////////////////////////////////////////////
 wire tape_adc, tape_adc_act;
