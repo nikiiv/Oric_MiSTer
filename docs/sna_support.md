@@ -1,9 +1,29 @@
 # Oricutron-compatible snapshot (.sna) support
 
-Working reference for snapshot save/restore in this core. The on-FPGA
-implementation is not yet built; this doc captures the file-format
-contract and the mapping from Oricutron fields to our RTL signals so the
-implementation phase can proceed without re-deriving any of it.
+Working reference for snapshot save/restore in this core. Documents the
+file-format contract, the mapping from Oricutron fields to our RTL
+signals, and the current implementation status.
+
+## Status
+
+| Direction | State                                                               |
+| --------- | ------------------------------------------------------------------- |
+| **LOAD**  | Working: RAM, CPU, AY register file + creg, VIA register file (12). |
+| **SAVE**  | Not started.                                                        |
+
+LOAD was built in two passes:
+
+- **v1** restored 64 KiB main RAM and the 6502 register file
+  (PC/A/X/Y/S/P). Audio reset to silence and VIA-driven IRQs re-armed
+  on the next CPU write.
+- **v2** added direct chip-side restore of the 15-byte AY register file
+  (with current-register select) and 12 of the 16 VIA registers (ORA,
+  ORB, DDRA, DDRB, T1L_L/H, T2L_L/H, SR, ACR, PCR, IER). Audio resumes
+  with the captured tones, and VIA timer IRQs run at the right cadence.
+
+What's intentionally **not** restored — see [what's not yet
+implemented](#whats-not-yet-implemented) for the rationale and v3
+candidate list.
 
 ## Why snapshots
 
@@ -40,12 +60,12 @@ Every block is:
 Blocks may appear in any order. A reader skips unknown tags by reading
 `size` and seeking forward.
 
-### Blocks we write/read in v1
+### Blocks we honour on LOAD
 
-We emit the **minimum block set Oricutron needs to load and run** an
-Atmos snapshot, plus we honour the same set on load. All other Oricutron
-blocks are skipped on load and omitted on save; Oricutron handles
-missing optional blocks gracefully.
+We honour the **minimum block set needed to restore an Atmos snapshot**.
+All other Oricutron blocks are skipped on load. Oricutron itself handles
+missing optional blocks gracefully on the desktop side, so files we
+might emit later in the SAVE direction will round-trip.
 
 | Tag       | Size  | Purpose                                                |
 | --------- | ----- | ------------------------------------------------------ |
@@ -78,133 +98,148 @@ symbol blocks (`SYR`, `SYU`, `SY0..SY7`), breakpoints (`BKP`).
 
 ### Field-level mapping (our core ↔ Oricutron fields)
 
-For each block, fields we have direct signals for are marked **[live]**;
-fields that are Oricutron-internal scratch we don't reproduce are marked
-**[zero]** (write `0`, ignore on load). Audio/timer counters we'll plumb
-out as part of the implementation are marked **[plumb]**.
+For each block, fields are marked with their LOAD status:
+
+- **[done]** — restored by v1 or v2 LOAD
+- **[skip]** — intentionally not restored (Oricutron-internal scratch
+  that's regenerated, derived from other state we do restore, or
+  controller/Telestrat fields irrelevant to Atmos v1)
+- **[v3]** — candidate for v3: live timer counters, AY oscillator
+  phase, VIA shift-register count, etc. Currently skipped, and the
+  program glitches briefly on resume because of it
 
 #### `OSN\0` (21 bytes)
 
-| Off | Size | Field                | Source                                      |
-| --- | ---- | -------------------- | ------------------------------------------- |
-| 0   | 1    | machine type         | **[live]** `2` for Atmos (0=Oric-1, 1=Oric-1 16K, 2=Atmos, 3=Telestrat, 4=Pravetz) |
-| 1   | 4    | overclock multiplier | **[zero]** `1`                              |
-| 5   | 4    | overclock shift      | **[zero]** `0`                              |
-| 9   | 2    | vsync timing         | **[live]** `272` for 50 Hz (Oricutron value)|
-| 11  | 1    | rom disable flag     | **[live]** `0` (no ROM-disable in our core) |
-| 12  | 1    | rom enable flag      | **[live]** `1`                              |
-| 13  | 1    | vsync hack flag      | **[zero]** `0`                              |
-| 14  | 1    | drive type           | **[live]** `0` (no disk in v1)              |
-| 15  | 1    | tape turbo flag      | **[zero]** `0`                              |
-| 16  | 1    | video mode           | **[live]** ULA mode (Oricutron uses `2` = HIRES, etc.) |
-| 17  | 4    | keymap               | **[zero]** `0`                              |
+| Off | Size | Field                | Source                                          |
+| --- | ---- | -------------------- | ----------------------------------------------- |
+| 0   | 1    | machine type         | **[skip]** read but not validated               |
+| 1   | 4    | overclock multiplier | **[skip]**                                      |
+| 5   | 4    | overclock shift      | **[skip]**                                      |
+| 9   | 2    | vsync timing         | **[skip]** core uses its own VSYNC timing       |
+| 11  | 1    | rom disable flag     | **[skip]**                                      |
+| 12  | 1    | rom enable flag      | **[skip]**                                      |
+| 13  | 1    | vsync hack flag      | **[skip]**                                      |
+| 14  | 1    | drive type           | **[skip]** v1: no disk                          |
+| 15  | 1    | tape turbo flag      | **[skip]**                                      |
+| 16  | 1    | video mode           | **[skip]** ULA mode is in RAM attributes anyway |
+| 17  | 4    | keymap               | **[skip]**                                      |
+
+The OSN block is recognised so that the following `DATA` block is
+identified as RAM (the loader walks blocks linearly and only treats a
+`DATA` block as RAM when the immediately preceding block was OSN).
 
 Followed by: `DATA` block, **80 KiB** payload (= `oric->memsize`). First
-64 KiB is the address-space RAM image (`$0000-$FFFF`); upper 16 KiB is
-the disk-overlay area Oricutron always allocates. Pad the upper 16 KiB
-with zeros when saving from this core.
+64 KiB is the address-space RAM image (`$0000-$FFFF`) — **[done]**, this
+is what gets streamed into our main spram. Upper 16 KiB is the
+disk-overlay area Oricutron always allocates; **[skip]** on load (we
+don't have an overlay in v1).
 
 #### `CPU\0` (21 bytes)
 
-| Off | Size | Field         | Source                                        |
-| --- | ---- | ------------- | --------------------------------------------- |
-| 0   | 4    | cycle counter | **[zero]** `0`                                |
-| 4   | 2    | PC            | **[live]** T65 `Regs[63:48]` (need to expose) |
-| 6   | 2    | last PC       | **[zero]** `0`                                |
-| 8   | 2    | calc PC       | **[zero]** `0`                                |
-| 10  | 2    | calc int      | **[zero]** `0`                                |
-| 12  | 1    | NMI flag      | **[zero]** `0`                                |
-| 13  | 1    | A             | **[live]** T65 `Regs[7:0]`                    |
-| 14  | 1    | X             | **[live]** T65 `Regs[15:8]`                   |
-| 15  | 1    | Y             | **[live]** T65 `Regs[23:16]`                  |
-| 16  | 1    | S             | **[live]** T65 `Regs[39:32]`                  |
-| 17  | 1    | P             | **[live]** T65 `Regs[31:24]`                  |
-| 18  | 1    | IRQ flag      | **[zero]** `0`                                |
-| 19  | 1    | NMI count     | **[zero]** `0`                                |
-| 20  | 1    | calc opcode   | **[zero]** `0`                                |
+| Off | Size | Field         | Source                                                                |
+| --- | ---- | ------------- | --------------------------------------------------------------------- |
+| 0   | 4    | cycle counter | **[skip]** Oricutron-internal                                         |
+| 4   | 2    | PC            | **[done]** → T65 `Regs_set[63:48]`                                    |
+| 6   | 2    | last PC       | **[skip]** Oricutron scratch                                          |
+| 8   | 2    | calc PC       | **[skip]** Oricutron scratch                                          |
+| 10  | 2    | calc int      | **[skip]** Oricutron scratch                                          |
+| 12  | 1    | NMI flag      | **[skip]**                                                            |
+| 13  | 1    | A             | **[done]** → T65 `Regs_set[7:0]`                                      |
+| 14  | 1    | X             | **[done]** → T65 `Regs_set[15:8]`                                     |
+| 15  | 1    | Y             | **[done]** → T65 `Regs_set[23:16]`                                    |
+| 16  | 1    | S             | **[done]** → T65 `Regs_set[39:32]`                                    |
+| 17  | 1    | P             | **[done]** → T65 `Regs_set[31:24]`                                    |
+| 18  | 1    | IRQ flag      | **[skip]** core re-derives from VIA/disk IRQ lines                    |
+| 19  | 1    | NMI count     | **[skip]**                                                            |
+| 20  | 1    | calc opcode   | **[skip]**                                                            |
 
-Verify the T65 `Regs` bit ordering against `rtl/T65/T65.vhd` during
-implementation — the table above reflects the conventional layout but
-forks vary.
+T65's snap branch (in 3 register-clock processes) clears the
+inflight-instruction state to the same values as a fresh reset
+(IR/MCycle/Set_Addr_To_r/etc.), then loads PC/A/X/Y/S/P from
+`Regs_set`. On the next clock the CPU does a clean opcode fetch from
+the loaded PC.
 
 #### `VIA\0` (39 bytes)
 
 Authoritative order from `snapshot.c:286-320`.
 
-| Off | Size | Field          | Source                                       |
-| --- | ---- | -------------- | -------------------------------------------- |
-| 0   | 1    | IFR            | **[live]** `r_ifr`                           |
-| 1   | 1    | IRB            | **[live]** `r_irb`                           |
-| 2   | 1    | ORB            | **[live]** `r_orb`                           |
-| 3   | 1    | IRBL (latched) | **[zero]** `0` — no separate latch in m6522.vhd |
-| 4   | 1    | IRA            | **[live]** `r_ira`                           |
-| 5   | 1    | ORA            | **[live]** `r_ora`                           |
-| 6   | 1    | IRAL (latched) | **[zero]** `0`                               |
-| 7   | 1    | DDRA           | **[live]** `r_ddra`                          |
-| 8   | 1    | DDRB           | **[live]** `r_ddrb`                          |
-| 9   | 1    | T1L_L          | **[live]** `r_t1l_l`                         |
-| 10  | 1    | T1L_H          | **[live]** `r_t1l_h`                         |
-| 11  | 2    | T1C            | **[plumb]** `t1c`                            |
-| 13  | 1    | T2L_L          | **[live]** `r_t2l_l`                         |
-| 14  | 1    | T2L_H          | **[live]** `r_t2l_h`                         |
-| 15  | 2    | T2C            | **[plumb]** `t2c`                            |
-| 17  | 1    | SR             | **[live]** `r_sr`                            |
-| 18  | 1    | ACR            | **[live]** `r_acr`                           |
-| 19  | 1    | PCR            | **[live]** `r_pcr`                           |
-| 20  | 1    | IER            | **[live]** `r_ier`                           |
-| 21  | 1    | CA1            | **[zero]** `0` — line state, can re-derive   |
-| 22  | 1    | CA2            | **[zero]** `0`                               |
-| 23  | 1    | CB1            | **[zero]** `0`                               |
-| 24  | 1    | CB2            | **[zero]** `0`                               |
-| 25  | 1    | SR count       | **[plumb]** `sr_cnt`                         |
-| 26  | 1    | T1 reload      | **[zero]** `0`                               |
-| 27  | 1    | T2 reload      | **[zero]** `0`                               |
-| 28  | 2    | SR time        | **[zero]** `0`                               |
-| 30  | 1    | T1 run         | **[plumb]** `t1c_active`                     |
-| 31  | 1    | T2 run         | **[plumb]** `t2c_active`                     |
-| 32  | 1    | CA2 pulse      | **[zero]** `0`                               |
-| 33  | 1    | CB2 pulse      | **[zero]** `0`                               |
-| 34  | 1    | SR trigger     | **[zero]** `0`                               |
-| 35  | 4    | IRQ bit        | **[zero]** `0`                               |
+| Off | Size | Field          | Source                                                                                          |
+| --- | ---- | -------------- | ----------------------------------------------------------------------------------------------- |
+| 0   | 1    | IFR            | **[skip]** computed from source IRQ flags (t1_irq, t2_irq, etc.) — no direct write path in chip |
+| 1   | 1    | IRB            | **[skip]** input shadow                                                                         |
+| 2   | 1    | ORB            | **[done]** → snap_we addr `$0`                                                                  |
+| 3   | 1    | IRBL (latched) | **[skip]** input shadow                                                                         |
+| 4   | 1    | IRA            | **[skip]** input shadow                                                                         |
+| 5   | 1    | ORA            | **[done]** → snap_we addr `$1`                                                                  |
+| 6   | 1    | IRAL (latched) | **[skip]** input shadow                                                                         |
+| 7   | 1    | DDRA           | **[done]** → snap_we addr `$3`                                                                  |
+| 8   | 1    | DDRB           | **[done]** → snap_we addr `$2`                                                                  |
+| 9   | 1    | T1L_L          | **[done]** → snap_we addr `$4` (latch only — snap branch doesn't fire t1_load_counter)          |
+| 10  | 1    | T1L_H          | **[done]** → snap_we addr `$5` (latch only)                                                     |
+| 11  | 2    | T1C            | **[v3]** live counter — without restore, T1 IRQ fires at the wrong moment until the program re-arms |
+| 13  | 1    | T2L_L          | **[done]** → snap_we addr `$8`                                                                  |
+| 14  | 1    | T2L_H          | **[done]** → snap_we addr `$9`                                                                  |
+| 15  | 2    | T2C            | **[v3]** live counter                                                                           |
+| 17  | 1    | SR             | **[done]** → snap_we addr `$A` (direct write, bypasses sr_write_ena)                            |
+| 18  | 1    | ACR            | **[done]** → snap_we addr `$B`                                                                  |
+| 19  | 1    | PCR            | **[done]** → snap_we addr `$C`                                                                  |
+| 20  | 1    | IER            | **[done]** → snap_we addr `$E` (direct write, bypasses bit-7 set/clear protocol)                |
+| 21  | 1    | CA1            | **[skip]** line state — handshake re-arms on next CPU access                                    |
+| 22  | 1    | CA2            | **[skip]** line state                                                                           |
+| 23  | 1    | CB1            | **[skip]** line state                                                                           |
+| 24  | 1    | CB2            | **[skip]** line state                                                                           |
+| 25  | 1    | SR count       | **[v3]** mid-shift count                                                                        |
+| 26  | 1    | T1 reload      | **[skip]** Oricutron scratch                                                                    |
+| 27  | 1    | T2 reload      | **[skip]** Oricutron scratch                                                                    |
+| 28  | 2    | SR time        | **[skip]** Oricutron scratch                                                                    |
+| 30  | 1    | T1 run         | **[v3]** active flag                                                                            |
+| 31  | 1    | T2 run         | **[v3]** active flag                                                                            |
+| 32  | 1    | CA2 pulse      | **[skip]**                                                                                      |
+| 33  | 1    | CB2 pulse      | **[skip]**                                                                                      |
+| 34  | 1    | SR trigger     | **[skip]**                                                                                      |
+| 35  | 4    | IRQ bit        | **[skip]**                                                                                      |
 
 #### `AY\0\0` (153 bytes)
 
 Authoritative order from `snapshot.c:251-283`. NUM_AY_REGS = 15
 (AY-3-8910 register file plus IO Port A index).
 
-| Off | Size | Field                                     | Source                                |
-| --- | ---- | ----------------------------------------- | ------------------------------------- |
-| 0   | 1    | bus mode (`bmode`)                        | **[zero]** `0`                        |
-| 1   | 1    | current register (`creg`)                 | **[live]** AY address latch           |
-| 2   | 15   | `eregs[15]` — register file               | **[live]** AY register file           |
-| 17  | 8    | 8 keystates                               | **[live]** keyboard column read state |
-| 25  | 12   | 3 tone periods (u32 each)                 | **[live]** from regs 0-5              |
-| 37  | 4    | noise period (u32)                        | **[live]** from reg 6                 |
-| 41  | 4    | envelope period (u32)                     | **[live]** from regs 11-12            |
-| 45  | 18   | per-channel `tonebit/noisebit/vol` (u16×3 each) | **[plumb]** ff/vol per channel  |
-| 63  | 2    | newout                                    | **[zero]** `0`                        |
-| 65  | 12   | per-channel timer `ct[3]` (u32 each)      | **[plumb]** `a/b/c_count`             |
-| 77  | 4    | noise timer `ctn` (u32)                   | **[plumb]** `n_count`                 |
-| 81  | 4    | envelope timer `cte` (u32)                | **[plumb]** envelope counter          |
-| 85  | 48   | per-channel `tonepos/tonestep/sign/out` (u32×4 each) | **[zero]** mostly `0`      |
-| 133 | 4    | envelope position                         | **[plumb]** envelope phase            |
-| 137 | 4    | current noise value                       | **[plumb]** noise LFSR                |
-| 141 | 4    | RNG rack (`rndrack`)                      | **[plumb]** noise LFSR                |
-| 145 | 4    | key bit delay                             | **[zero]** `0`                        |
-| 149 | 4    | current key offset                        | **[zero]** `0`                        |
+| Off | Size | Field                                                | Source                                                       |
+| --- | ---- | ---------------------------------------------------- | ------------------------------------------------------------ |
+| 0   | 1    | bus mode (`bmode`)                                   | **[skip]** Oricutron-internal                                |
+| 1   | 1    | current register (`creg`)                            | **[done]** → `snap_creg_we`                                  |
+| 2   | 15   | `eregs[15]` — register file                          | **[done]** → 15 snap_we writes (one per AY register address) |
+| 17  | 8    | 8 keystates                                          | **[skip]** keyboard column shadow — re-derived               |
+| 25  | 12   | 3 tone periods (u32 each)                            | **[skip]** derived from regs 0-5 (already restored)          |
+| 37  | 4    | noise period (u32)                                   | **[skip]** derived from reg 6                                |
+| 41  | 4    | envelope period (u32)                                | **[skip]** derived from regs 11-12                           |
+| 45  | 18   | per-channel `tonebit/noisebit/vol` (u16×3 each)      | **[v3]** per-channel oscillator phase                        |
+| 63  | 2    | newout                                               | **[skip]** Oricutron audio-rendering scratch                 |
+| 65  | 12   | per-channel timer `ct[3]` (u32 each)                 | **[v3]** tone counters (`a/b/c_count`)                       |
+| 77  | 4    | noise timer `ctn` (u32)                              | **[v3]** noise counter (`n_count`)                           |
+| 81  | 4    | envelope timer `cte` (u32)                           | **[v3]** envelope counter                                    |
+| 85  | 48   | per-channel `tonepos/tonestep/sign/out` (u32×4 each) | **[skip]** Oricutron audio-rendering scratch                 |
+| 133 | 4    | envelope position                                    | **[v3]** envelope phase                                      |
+| 137 | 4    | current noise value                                  | **[v3]** noise LFSR                                          |
+| 141 | 4    | RNG rack (`rndrack`)                                 | **[v3]** noise LFSR                                          |
+| 145 | 4    | key bit delay                                        | **[skip]**                                                   |
+| 149 | 4    | current key offset                                   | **[skip]**                                                   |
 
-Oricutron's AY model is internally rich; our `psg.v` is much simpler.
-We plumb out tone/noise/envelope counters (per the "registers + internal
-counters" choice); the per-channel `tonepos/tonestep/sign/out` block is
-Oricutron audio-rendering scratch and may safely be zero on load.
+The 15 AY registers + creg cover the audible-state restore; everything
+else in this block is either Oricutron audio-rendering scratch
+(regenerated) or live oscillator/envelope state (a v3 candidate — would
+need internal `*_count` and `*_ff` signals plumbed out of `psg.v`).
 
-### State we DO NOT capture in v1
+### Whole blocks we ignore on LOAD
 
 - **Tape state (`TAP`)** — tape is irrelevant once a program is loaded.
 - **ROM patches (`PCH`)** — Oricutron's fast-disk/fast-tape patches; n/a.
-- **Disk controller blocks** (`MDC`, `WDD`, `JSM`, `PRV`, `DSK`) — no disk.
-- **Telestrat blocks** (`BNK`, `ACI`, `TVA`) — Atmos only in v1.
+- **Disk controller blocks** (`MDC`, `WDD`, `JSM`, `PRV`, `DSK`) — no disk in v1/v2.
+- **Telestrat blocks** (`BNK`, `ACI`, `AUX`, `TVA`) — Atmos only in v1/v2.
 - **Debug blocks** (`SYR`, `SYU`, `BKP`) — never relevant.
+
+These all dispatch to `S_SKIP` in the LOAD state machine: read the size,
+seek past the payload, continue.
 
 ### Typical file size (minimal block set)
 
@@ -222,20 +257,70 @@ that includes optional `TAP` (46 + tape buffer 13830), `PCH` (76),
 and `SYR` (3600) blocks. Our minimal save will be ~80 KiB. Well under
 the 256 KiB cap; no compression needed.
 
-## Open implementation questions (for the next plan)
+## Implementation snapshot (where things landed)
 
-1. **Trigger** — new "Save snapshot" / "Load snapshot" menu items;
-   separate ioctl indexes (likely `5` for load, `6` for save); whether
-   to also bind a hot-key.
-2. **Capture mechanism** — read RAM through the existing spram address
-   mux (reverse direction of the DMA loader); CPU/VIA/AY register
-   fields exposed via new wiring up through `oricatmos`.
-3. **Counter plumbing** — adding `snap_*` debug outputs to `m6522.vhd`
-   and `psg.v` for the **[plumb]** fields.
-4. **CPU halt during save AND load** — extend the existing
-   `cpu_halt | dma_active` chain with a `snap_active` term.
-5. **RAM restore** — write 64 KiB through the spram mux exactly as the
-   DMA loader does for tapes.
+- **Menu / trigger:** `F4,SNA,Load Snapshot;` in `Oric.sv`, ioctl_index
+  `4`. File is buffered in a new 128 KiB `snapcache` spram, then a state
+  machine walks the typed-block container after `ioctl_download` falls.
+- **CPU halt:** `snap_active` is OR'd into the existing
+  `cpu_halt | dma_active` chain feeding `oricatmos.cpu_halt`.
+- **RAM restore:** during `S_BLK_DATA_RAM`, the snap state machine
+  drives `snap_ram_addr/data/we` through a new branch in the main spram
+  address-mux — mirrors the DMA loader's pattern.
+- **CPU register restore:** new `Regs_set[63:0]` + `Regs_set_we` ports
+  on T65 with snap branches in three register-clock processes (PC/S +
+  inflight state, P/X/Y/A, MCycle/RstCycle).
+- **AY/VIA register restore:** new `snap_we`/`snap_addr`/`snap_data`
+  ports on `psg.v` and `m6522.vhd` (plus `snap_creg_we`/`snap_creg` on
+  the AY) with parallel write branches in each chip's existing
+  register-write process. Restore drives them from `Oric.sv` — no bus
+  muxing required at the oricatmos level.
+- **Debug visibility:** optional `SNAP_DEBUG` Verilog macro paints the
+  captured CPU regs at row 10 of the text screen so you can verify the
+  decoder visually. Turn it on with `tools/oric-build --snap-debug`;
+  defaults off in release builds.
+
+## What's not yet implemented
+
+### v3 candidates (all flagged **[v3]** in the field tables above)
+
+- **VIA live counters** (`T1C`, `T2C`) — without these the next timer
+  IRQ fires at the wrong moment. Most games re-arm T1 each frame, so
+  the visible glitch is brief.
+- **VIA shift-register count + active flags** — affects programs that
+  resume mid-shift, rare on Atmos.
+- **AY oscillator state** — tone counters (`a/b/c_count`), tone
+  flip-flops (`a/b/c_ff`), noise counter and LFSR, envelope phase. Not
+  restoring these means the first audio frame after resume has the
+  right tone/volume but slightly wrong waveform position; usually
+  inaudible after a few ms.
+- **VIA IFR direct restore** — IFR bits are continuously driven by the
+  source IRQ flags (`t1_irq`, `cb1_irq`, etc.), so a direct write
+  doesn't stick. Restoring IFR properly requires writing to those
+  source flags, which lives across multiple processes in `m6522.vhd`.
+  Any IRQ pending at snap time gets refired/discarded in the first few
+  cycles after resume.
+
+### SAVE direction (entirely unimplemented)
+
+LOAD only for now. SAVE would need:
+
+- An `ioctl_upload` path (the framework supports it — see
+  `sys/hps_io.sv`).
+- Reverse plumbing: outputs from T65/VIA/AY back up through oricatmos.
+  T65's `Regs` output is wired but currently unused; m6522 and psg
+  don't expose internal registers as outputs and would need new ports.
+- Same on-FPGA state machine logic as LOAD but in reverse: read from
+  RAM/registers, frame as Oricutron blocks, emit one byte per
+  `ioctl_din` cycle.
+
+### Other Oricutron blocks we don't emit
+
+If/when SAVE happens, we'll likely emit only `OSN+DATA(RAM)`, `CPU`,
+`AY`, `VIA` — the same minimal set we honour on LOAD. The rest
+(`TAP`, `PCH`, `SYR`, disk blocks, Telestrat blocks) is irrelevant or
+out of scope. Oricutron loads files with missing optional blocks
+without complaint.
 
 ## Tooling
 
@@ -251,16 +336,25 @@ behaviour — strong evidence the layout above is correct.
 python3 tools/sna-inspect.py path/to/snapshot.sna
 ```
 
-## Verification path (before any RTL)
+## Verification log
 
 1. Hand-craft a minimal `.sna` (correct envelopes, all-zero payloads,
    plain RAM dump lifted from `scubadive.sna`) and confirm Oricutron
    loads it without error. **DONE** for ground-truth verification.
 2. Walk a real Oricutron save with `tools/sna-inspect.py` and
-   cross-check fields against the tables above. **DONE.**
-3. Once RTL is built, save a snapshot from MiSTer, load it in Oricutron
-   (and the reverse), and verify the program continues running
-   visually/audibly.
+   cross-check fields against the tables above. **DONE** —
+   pre-implementation; caught the `\x00` Verilog string-literal trap
+   later in v1 RTL.
+3. **v1 hardware test** — Oricutron-saved `scubadive.sna`, `gravitor.sna`,
+   and a hand-made `simple_basic.sna` loaded via `F4`. CPU resumed from
+   the captured PC; RAM contents matched. Audio silent until the
+   program rewrote AY (expected; v1 didn't restore audio). **DONE.**
+4. **v2 hardware test** — same snapshots reloaded after AY/VIA register
+   restore landed. Audio resumes with the captured tones; VIA-driven
+   IRQs run at the right cadence. **DONE.**
+5. **SAVE round-trip** — save snapshot from MiSTer, load it in
+   Oricutron (and the reverse), verify the program continues running
+   visually/audibly. **NOT DONE** — SAVE direction not yet implemented.
 
 ## References
 
