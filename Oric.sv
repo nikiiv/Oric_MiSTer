@@ -650,16 +650,18 @@ cassette cassette (
 // Parses TAP header in the tapecache (sync 0x16 + marker 0x24, then 9-byte
 // header: type@+2, end@+4/+5 big-endian, start@+6/+7 big-endian, +8 sep,
 // then null-terminated filename), then copies the program data into main
-// RAM via the spram mux. For BASIC (type 0x80) writes end+1 to ZP $9A..$9F
-// so LIST sees an end-of-program/start-of-vars consistent with the load.
+// RAM via the spram mux. Patches VARTAB/ARYTAB/STREND so LIST/RUN/edit
+// behave like a real load, and writes a status line at $BB80 with the
+// program name, type and start address.
 
 localparam D_IDLE   = 4'd0,
            D_INIT   = 4'd1,
            D_SCAN   = 4'd2,
            D_WRITE  = 4'd3,
            D_PATCH  = 4'd4,
-           D_DRAIN  = 4'd5,
-           D_DONE   = 4'd6;
+           D_STATUS = 4'd5,
+           D_DRAIN  = 4'd6,
+           D_DONE   = 4'd7;
 
 reg  [3:0]  dma_state;
 reg  [15:0] dma_bot_seg;
@@ -670,9 +672,17 @@ reg  [15:0] dma_data_end;
 reg  [15:0] dma_write_addr;
 reg  [2:0]  dma_patch_step;
 reg  [1:0]  dma_drain_cnt;
+reg  [7:0]  dma_prog_type;
+reg  [7:0]  dma_name_buf [0:11];
+reg  [3:0]  dma_name_pos;
+reg  [5:0]  dma_status_idx;
 
 wire [15:0] dma_end_plus_1 = dma_data_end + 16'd1;
 wire        dma_trigger    = ioctl_downlD && ~ioctl_download && load_tape_dma;
+
+function automatic [7:0] hex_digit(input [3:0] n);
+	hex_digit = (n < 4'd10) ? (8'h30 + n) : (8'h37 + n);
+endfunction
 
 always @(posedge clk_sys) begin
 	if (reset) begin
@@ -693,6 +703,7 @@ always @(posedge clk_sys) begin
 					dma_bot_seg    <= 16'd0;
 					dma_eos        <= 1'b0;
 					dma_name_done  <= 1'b0;
+					dma_name_pos   <= 4'd0;
 				end
 			end
 
@@ -714,6 +725,7 @@ always @(posedge clk_sys) begin
 					end
 				end
 				else begin
+					if (dma_cache_addr - 16'd1 == dma_bot_seg + 16'd2) dma_prog_type        <= tape_data;
 					if (dma_cache_addr - 16'd1 == dma_bot_seg + 16'd4) dma_data_end[15:8]   <= tape_data;
 					if (dma_cache_addr - 16'd1 == dma_bot_seg + 16'd5) dma_data_end[7:0]    <= tape_data;
 					if (dma_cache_addr - 16'd1 == dma_bot_seg + 16'd6) dma_data_start[15:8] <= tape_data;
@@ -723,6 +735,10 @@ always @(posedge clk_sys) begin
 							dma_name_done  <= 1'b1;
 							dma_write_addr <= dma_data_start;
 							dma_state      <= D_WRITE;
+						end
+						else if (dma_name_pos < 4'd12) begin
+							dma_name_buf[dma_name_pos] <= tape_data;
+							dma_name_pos               <= dma_name_pos + 4'd1;
 						end
 					end
 				end
@@ -759,9 +775,48 @@ always @(posedge clk_sys) begin
 				endcase
 				dma_patch_step <= dma_patch_step + 3'd1;
 				if (dma_patch_step == 3'd5) begin
+					dma_status_idx <= 6'd0;
+					dma_state      <= D_STATUS;
+				end
+			end
+
+			// Write a 40-char status line at $BB80 (top row): an INK-WHITE
+			// attribute byte, then "DMA <name12> T:<B/M/?> @$XXXX" padded
+			// with spaces. Filename slots beyond what was captured are
+			// padded with spaces.
+			D_STATUS: begin
+				dma_we   <= 1'b1;
+				dma_addr <= 16'hBB80 + {10'd0, dma_status_idx};
+				case (dma_status_idx)
+					6'd0:  dma_data <= 8'h07;
+					6'd1:  dma_data <= "D";
+					6'd2:  dma_data <= "M";
+					6'd3:  dma_data <= "A";
+					6'd4:  dma_data <= " ";
+					6'd5,  6'd6,  6'd7,  6'd8,  6'd9,  6'd10,
+					6'd11, 6'd12, 6'd13, 6'd14, 6'd15, 6'd16:
+						dma_data <= ((dma_status_idx - 6'd5) < {2'd0, dma_name_pos})
+						            ? dma_name_buf[dma_status_idx - 6'd5]
+						            : 8'h20;
+					6'd17: dma_data <= " ";
+					6'd18: dma_data <= "T";
+					6'd19: dma_data <= ":";
+					6'd20: dma_data <= (dma_prog_type == 8'h00) ? "B"
+					                 : (dma_prog_type == 8'h80) ? "M" : "?";
+					6'd21: dma_data <= " ";
+					6'd22: dma_data <= "@";
+					6'd23: dma_data <= "$";
+					6'd24: dma_data <= hex_digit(dma_data_start[15:12]);
+					6'd25: dma_data <= hex_digit(dma_data_start[11:8]);
+					6'd26: dma_data <= hex_digit(dma_data_start[7:4]);
+					6'd27: dma_data <= hex_digit(dma_data_start[3:0]);
+					default: dma_data <= " ";
+				endcase
+				if (dma_status_idx == 6'd39) begin
 					dma_drain_cnt <= 2'd0;
 					dma_state     <= D_DRAIN;
 				end
+				else dma_status_idx <= dma_status_idx + 6'd1;
 			end
 
 			// Hold dma_active for a few cycles so the last write commits

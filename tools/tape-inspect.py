@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Inspect an Oric .tap file: sync, header, name, and first 10 data bytes."""
+"""Inspect an Oric .tap file: sync, header, name, and first 10 data bytes.
+
+Handles multi-segment tapes (multiple back-to-back sync+header+payload blocks
+in a single .tap file) by parsing each segment in turn.
+"""
 
 import sys
 from pathlib import Path
@@ -24,34 +28,40 @@ def printable(b: int) -> str:
 
 
 def fmt_byte(off: int, b: int, label: str = "") -> str:
-    suffix = f"   <- {label}" if label else ""
-    return f"  off={off:>3}  dec={b:>3}  hex={b:02X}  '{printable(b)}'{suffix}"
+    suffix = f"<- {label}" if label else ""
+    return f"  off={str(off):<4}  dec={b:>5}  hex={b:02X}    '{printable(b)}'  {suffix}"
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} <file.tap>", file=sys.stderr)
-        return 2
+def fmt_word(off_lo: int, off_hi: int, w: int, label: str = "") -> str:
+    suffix = f"<- {label}" if label else ""
+    rng = f"{off_lo}-{off_hi}"
+    return f"  off={rng:<4}  dec={w:>5}  hex={w:04X}       {suffix}"
 
-    path = Path(sys.argv[1])
-    data = path.read_bytes()
-    print(f"file : {path}  ({len(data)} bytes)")
+
+def parse_segment(data: bytes, offset: int, index: int):
+    """Parse one tape segment starting at `offset` (where 0x16 sync begins).
+
+    Returns the file offset just past this segment's payload, or None on error.
+    """
+    print(f"=== segment {index} (offset {offset}) ===")
 
     # ---- Sync zone ----
-    sync_count = 0
-    while sync_count < len(data) and data[sync_count] == SYNC_BYTE:
-        sync_count += 1
+    i = offset
+    while i < len(data) and data[i] == SYNC_BYTE:
+        i += 1
+    sync_count = i - offset
 
-    if sync_count >= len(data) or data[sync_count] != SYNC_END:
-        print(f"sync : malformed — expected 0x16... 0x24, got 0x{data[sync_count]:02X} at offset {sync_count}")
-        return 1
+    if i >= len(data) or data[i] != SYNC_END:
+        got = f"0x{data[i]:02X}" if i < len(data) else "EOF"
+        print(f"sync : malformed — expected 0x16... 0x24, got {got} at offset {i}")
+        return None
 
-    bot_seg = sync_count + 1  # first byte of header
-    print(f"sync : {sync_count} x 0x16, then 0x24 at offset {sync_count}")
+    bot_seg = i + 1  # first byte of header
+    print(f"sync : {sync_count} x 0x16, then 0x24 at offset {i}")
 
     if len(data) < bot_seg + 9:
         print("hdr  : truncated — file too short for a 9-byte header")
-        return 1
+        return None
 
     # ---- Header (9 bytes from bot_seg) ----
     hdr = data[bot_seg : bot_seg + 9]
@@ -65,36 +75,65 @@ def main() -> int:
     print(fmt_byte(1, hdr[1], "reserved"))
     print(fmt_byte(2, hdr[2], f"type ({TYPE_NAMES.get(type_byte, '?')})"))
     print(fmt_byte(3, hdr[3], f"auto ({AUTO_NAMES.get(auto_byte, '?')})"))
-    print(fmt_byte(4, hdr[4], "end_hi"))
-    print(fmt_byte(5, hdr[5], "end_lo"))
-    print(fmt_byte(6, hdr[6], "start_hi"))
-    print(fmt_byte(7, hdr[7], "start_lo"))
+    print(fmt_word(4, 5, end_addr,   "end address (big-endian)"))
+    print(fmt_word(6, 7, start_addr, "start address (big-endian)"))
     print(fmt_byte(8, hdr[8], "separator"))
 
-    print(f"addr : start=${start_addr:04X} ({start_addr})  "
-          f"end=${end_addr:04X} ({end_addr})  "
-          f"len={end_addr - start_addr + 1} bytes")
+    payload_len = end_addr - start_addr + 1
+    print(f"addr : start=${start_addr:04X}  end=${end_addr:04X}  "
+          f"len={payload_len} bytes")
 
     # ---- Filename (null-terminated) ----
     name_off = bot_seg + 9
     nul = data.find(b"\x00", name_off)
     if nul < 0:
         print("name : no NUL terminator found")
-        return 1
+        return None
     name_bytes = data[name_off:nul]
     name_str = name_bytes.decode("ascii", errors="replace") if name_bytes else "(empty)"
     print(f"name : \"{name_str}\"  ({len(name_bytes)} bytes + NUL)")
 
     # ---- First 10 program bytes, with absolute load addresses ----
     data_off = nul + 1
-    n = min(10, len(data) - data_off, end_addr - start_addr + 1)
+    n = min(10, len(data) - data_off, payload_len)
     print(f"data : first {n} bytes (file offset {data_off}, loads at ${start_addr:04X})")
-    for i in range(n):
-        b = data[data_off + i]
-        addr = start_addr + i
+    for k in range(n):
+        b = data[data_off + k]
+        addr = start_addr + k
         print(f"  ${addr:04X}  dec={b:>3}  hex={b:02X}  '{printable(b)}'")
 
-    return 0
+    return data_off + payload_len
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print(f"usage: {sys.argv[0]} <file.tap>", file=sys.stderr)
+        return 2
+
+    path = Path(sys.argv[1])
+    data = path.read_bytes()
+    print(f"file : {path}  ({len(data)} bytes)")
+
+    offset = 0
+    index = 1
+    rc = 0
+    while offset < len(data):
+        # Scan forward to next sync run, tolerating any inter-segment padding.
+        sync_start = data.find(bytes([SYNC_BYTE]), offset)
+        if sync_start < 0:
+            break
+        if sync_start > offset:
+            print(f"gap  : {sync_start - offset} non-sync byte(s) skipped before next segment")
+
+        next_offset = parse_segment(data, sync_start, index)
+        if next_offset is None:
+            rc = 1
+            break
+        offset = next_offset
+        index += 1
+
+    print(f"segments: {index - 1}")
+    return rc
 
 
 if __name__ == "__main__":
