@@ -106,7 +106,9 @@ ENTITY oricatmos IS
 		sd_din_fd3 : OUT STD_LOGIC_VECTOR (7 DOWNTO 0);
 		sd_dout_strobe : IN STD_LOGIC;
 		sd_din_strobe : IN STD_LOGIC;
-		cpu_halt : IN STD_LOGIC
+		cpu_halt : IN STD_LOGIC;
+		cpu_regs_set    : IN STD_LOGIC_VECTOR(63 DOWNTO 0) := (OTHERS => '0');
+		cpu_regs_set_we : IN STD_LOGIC := '0'
 	);
 END;
 
@@ -272,7 +274,9 @@ BEGIN
 			R_W_n => cpu_rw,
 			A => cpu_ad,
 			DI => cpu_di,
-			DO => cpu_do
+			DO => cpu_do,
+			Regs_set => cpu_regs_set,
+			Regs_set_we => cpu_regs_set_we
 		);
 
 	ram_ad <= ula_AD_SRAM WHEN (ula_PHI2 = '0') ELSE
