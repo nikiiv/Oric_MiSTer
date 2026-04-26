@@ -108,7 +108,15 @@ ENTITY oricatmos IS
 		sd_din_strobe : IN STD_LOGIC;
 		cpu_halt : IN STD_LOGIC;
 		cpu_regs_set    : IN STD_LOGIC_VECTOR(63 DOWNTO 0) := (OTHERS => '0');
-		cpu_regs_set_we : IN STD_LOGIC := '0'
+		cpu_regs_set_we : IN STD_LOGIC := '0';
+		via_snap_we     : IN STD_LOGIC := '0';
+		via_snap_addr   : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0');
+		via_snap_data   : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+		ay_snap_we      : IN STD_LOGIC := '0';
+		ay_snap_addr    : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0');
+		ay_snap_data    : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+		ay_snap_creg_we : IN STD_LOGIC := '0';
+		ay_snap_creg    : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0')
 	);
 END;
 
@@ -252,7 +260,12 @@ COMPONENT psg
 			MIX : OUT UNSIGNED (13 DOWNTO 0);
 			A   : OUT UNSIGNED (11 DOWNTO 0);
 			B   : OUT UNSIGNED(11 DOWNTO 0);
-			C   : OUT UNSIGNED(11 DOWNTO 0)
+			C   : OUT UNSIGNED(11 DOWNTO 0);
+			snap_we      : IN STD_LOGIC;
+			snap_addr    : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
+			snap_data    : IN STD_LOGIC_VECTOR(7 DOWNTO 0);
+			snap_creg_we : IN STD_LOGIC;
+			snap_creg    : IN STD_LOGIC_VECTOR(3 DOWNTO 0)
 );
 END COMPONENT;
 
@@ -379,7 +392,10 @@ BEGIN
 			RESET_L => RESETn,
 			I_P2_H => ula_phi2,
 			ENA_4 => ula_CLK_4_en,
-			CLK => CLK_IN
+			CLK => CLK_IN,
+			snap_we => via_snap_we,
+			snap_addr => via_snap_addr,
+			snap_data => via_snap_data
 		);
 
 
@@ -403,7 +419,13 @@ BEGIN
       iobd        => "ZZZZZZZZ",
       iobq        => psg_iob_out,
 
-      sel         => '1'
+      sel         => '1',
+
+      snap_we      => ay_snap_we,
+      snap_addr    => ay_snap_addr,
+      snap_data    => ay_snap_data,
+      snap_creg_we => ay_snap_creg_we,
+      snap_creg    => ay_snap_creg
     );
 
 	

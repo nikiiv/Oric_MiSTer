@@ -21,7 +21,17 @@ module psg
 	output wire[ 7:0] ioaq,
 
 	input  wire[ 7:0] iobd,
-	output wire[ 7:0] iobq
+	output wire[ 7:0] iobq,
+
+	// Snapshot register restore (driven by Oric.sv snap state machine).
+	// snap_we writes snap_data into the AY register selected by snap_addr.
+	// snap_creg_we sets the AY address-latch register so subsequent CPU
+	// data writes target the right register on resume.
+	input  wire       snap_we,
+	input  wire[ 3:0] snap_addr,
+	input  wire[ 7:0] snap_data,
+	input  wire       snap_creg_we,
+	input  wire[ 3:0] snap_creg
 );
 //-------------------------------------------------------------------------------------------------
 
@@ -36,6 +46,7 @@ localparam ADDRMASK = 4'b0000;
 reg[3:0] addr;
 always @(posedge clock, negedge reset) 
 	if(!reset) addr <= 1'd0;
+	else if(snap_creg_we) addr <= snap_creg;
 	else if(ce) if(bdir && bc1 && d[7:4] == ADDRMASK) addr <= d[3:0];
 
 //-------------------------------------------------------------------------------------------------
@@ -97,6 +108,25 @@ always @(posedge clock, negedge reset)
 		{ e_continue, e_attack, e_alternate, e_hold } <= 4'd0;
 		{ b_data_io, a_data_io, c_mix_noise, b_mix_noise, a_mix_noise, c_enable, b_enable, a_enable } <= 8'd0;
 	end
+	else if(snap_we)
+		case(snap_addr)
+			 0: a_period[ 7:0] <= snap_data;
+			 1: a_period[11:8] <= snap_data[3:0];
+			 2: b_period[ 7:0] <= snap_data;
+			 3: b_period[11:8] <= snap_data[3:0];
+			 4: c_period[ 7:0] <= snap_data;
+			 5: c_period[11:8] <= snap_data[3:0];
+			 6: n_period <= snap_data[4:0];
+			 7: { b_data_io, a_data_io, c_mix_noise, b_mix_noise, a_mix_noise, c_enable, b_enable, a_enable } <= snap_data;
+			 8: { a_mode, a_level } <= snap_data[4:0];
+			 9: { b_mode, b_level } <= snap_data[4:0];
+			10: { c_mode, c_level } <= snap_data[4:0];
+			11: e_period[ 7:0] <= snap_data;
+			12: e_period[15:8] <= snap_data;
+			13: { e_continue, e_attack, e_alternate, e_hold } <= snap_data[3:0];
+			14: a_data <= snap_data;
+			15: b_data <= snap_data;
+		endcase
 	else if(ce) if(bdir && !bc1)
 		case(addr)
 			 0: a_period[ 7:0] <= d;
