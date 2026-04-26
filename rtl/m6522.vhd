@@ -93,7 +93,15 @@ entity M6522 is
       I_P2_H                : in    std_logic; -- high for phase 2 clock  ____----__
       RESET_L               : in    std_logic;
       ENA_4                 : in    std_logic; -- clk enable
-      CLK                   : in    std_logic
+      CLK                   : in    std_logic;
+
+      -- Snapshot register restore (driven by Oric.sv snap state machine).
+      -- snap_we forces a direct write of snap_data into the register
+      -- selected by snap_addr, bypassing the chip-select / phi2 protocol
+      -- and the special semantics of IFR/IER/SR.
+      snap_we               : in    std_logic := '0';
+      snap_addr             : in    std_logic_vector(3 downto 0) := (others => '0');
+      snap_data             : in    std_logic_vector(7 downto 0) := (others => '0')
    );
 end;
 
@@ -272,7 +280,18 @@ begin
          w_orb_hs <= '0';
          w_ora_hs <= '0';
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_we = '1') then
+            -- Snapshot register restore: direct write, ignores phi2/CS
+            case snap_addr is
+               when x"0" => r_orb  <= snap_data;
+               when x"1" => r_ora  <= snap_data;
+               when x"2" => r_ddrb <= snap_data;
+               when x"3" => r_ddra <= snap_data;
+               when x"B" => r_acr  <= snap_data;
+               when x"C" => r_pcr  <= snap_data;
+               when others => null;
+            end case;
+         elsif (ENA_4 = '1') then
             w_orb_hs <= '0';
             w_ora_hs <= '0';
             if (cs = '1') and (I_RW_L = '0') then
@@ -315,7 +334,19 @@ begin
          r_t2l_l   <= (others => '1');
          r_t2l_h   <= (others => '1');
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_we = '1') then
+            -- Snapshot register restore: latch values without triggering
+            -- t1/t2_load_counter (counters keep their pre-snap value).
+            case snap_addr is
+               when x"4" => r_t1l_l <= snap_data;
+               when x"5" => r_t1l_h <= snap_data;
+               when x"6" => r_t1l_l <= snap_data;
+               when x"7" => r_t1l_h <= snap_data;
+               when x"8" => r_t2l_l <= snap_data;
+               when x"9" => r_t2l_h <= snap_data;
+               when others => null;
+            end case;
+         elsif (ENA_4 = '1') then
             t1_w_reset_int  <= false;
             t1_load_counter <= false;
 
@@ -837,7 +868,10 @@ begin
          sr_out <= '0';
          sr_active <= false;
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_we = '1') and (snap_addr = x"A") then
+            -- Snapshot register restore: direct write to SR
+            r_sr <= snap_data;
+         elsif (ENA_4 = '1') then
             -- decode mode
             dir_out  := r_acr(4); -- output on cb2
             cb1_op   := '0';
@@ -965,7 +999,10 @@ begin
       if (RESET_L = '0') then
          r_ier <= "0000000";
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_we = '1') and (snap_addr = x"E") then
+            -- Snapshot register restore: direct write to IER (ignore bit-7 protocol)
+            r_ier <= snap_data(6 downto 0);
+         elsif (ENA_4 = '1') then
             if ier_write_ena then
                if (load_data(7) = '1') then
                   -- set
