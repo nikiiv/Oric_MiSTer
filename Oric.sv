@@ -658,10 +658,11 @@ localparam D_IDLE   = 4'd0,
            D_INIT   = 4'd1,
            D_SCAN   = 4'd2,
            D_WRITE  = 4'd3,
-           D_PATCH  = 4'd4,
-           D_STATUS = 4'd5,
-           D_DRAIN  = 4'd6,
-           D_DONE   = 4'd7;
+           D_NEXT   = 4'd4,
+           D_PATCH  = 4'd5,
+           D_STATUS = 4'd6,
+           D_DRAIN  = 4'd7,
+           D_DONE   = 4'd8;
 
 reg  [3:0]  dma_state;
 reg  [15:0] dma_bot_seg;
@@ -676,8 +677,13 @@ reg  [7:0]  dma_prog_type;
 reg  [7:0]  dma_name_buf [0:11];
 reg  [3:0]  dma_name_pos;
 reg  [5:0]  dma_status_idx;
+reg         dma_first_seg;
+reg  [3:0]  dma_seg_count;
+reg  [15:0] dma_patch_end;
+reg  [15:0] dma_disp_start;
+reg  [7:0]  dma_disp_type;
 
-wire [15:0] dma_end_plus_1 = dma_data_end + 16'd1;
+wire [15:0] dma_end_plus_1 = dma_patch_end + 16'd1;
 wire        dma_trigger    = ioctl_downlD && ~ioctl_download && load_tape_dma;
 
 function automatic [7:0] hex_digit(input [3:0] n);
@@ -704,6 +710,8 @@ always @(posedge clk_sys) begin
 					dma_eos        <= 1'b0;
 					dma_name_done  <= 1'b0;
 					dma_name_pos   <= 4'd0;
+					dma_first_seg  <= 1'b1;
+					dma_seg_count  <= 4'd1;
 				end
 			end
 
@@ -718,7 +726,11 @@ always @(posedge clk_sys) begin
 			// tape_data at this cycle = mem[dma_cache_addr - 1].
 			D_SCAN: begin
 				dma_cache_addr <= dma_cache_addr + 16'd1;
-				if (!dma_eos) begin
+				if (dma_cache_addr > tape_end) begin
+					dma_patch_step <= 3'd0;
+					dma_state      <= D_PATCH;
+				end
+				else if (!dma_eos) begin
 					if (tape_data == 8'h24) begin
 						dma_eos     <= 1'b1;
 						dma_bot_seg <= dma_cache_addr; // first byte after 0x24
@@ -735,8 +747,13 @@ always @(posedge clk_sys) begin
 							dma_name_done  <= 1'b1;
 							dma_write_addr <= dma_data_start;
 							dma_state      <= D_WRITE;
+							if (dma_first_seg) begin
+								dma_patch_end  <= dma_data_end;
+								dma_disp_start <= dma_data_start;
+								dma_disp_type  <= dma_prog_type;
+							end
 						end
-						else if (dma_name_pos < 4'd12) begin
+						else if (dma_first_seg && dma_name_pos < 4'd12) begin
 							dma_name_buf[dma_name_pos] <= tape_data;
 							dma_name_pos               <= dma_name_pos + 4'd1;
 						end
@@ -752,9 +769,28 @@ always @(posedge clk_sys) begin
 				dma_addr       <= dma_write_addr;
 				dma_data       <= tape_data;
 				dma_write_addr <= dma_write_addr + 16'd1;
-				if (dma_write_addr == dma_data_end) begin
+				if (dma_write_addr == dma_data_end || dma_cache_addr > tape_end) begin
+					dma_state <= D_NEXT;
+				end
+			end
+
+			// End of one segment. If more bytes remain in the tape image,
+			// reset segment-local state and re-enter D_SCAN to parse the
+			// next header. Acts as the read-pipeline prime cycle (mirrors
+			// D_INIT) so D_SCAN sees mem[dma_cache_addr - 1] as expected.
+			D_NEXT: begin
+				dma_cache_addr <= dma_cache_addr + 16'd1;
+				if (dma_cache_addr > tape_end) begin
 					dma_patch_step <= 3'd0;
 					dma_state      <= D_PATCH;
+				end
+				else begin
+					dma_eos       <= 1'b0;
+					dma_bot_seg   <= 16'd0;
+					dma_name_done <= 1'b0;
+					dma_first_seg <= 1'b0;
+					if (dma_seg_count != 4'hF) dma_seg_count <= dma_seg_count + 4'd1;
+					dma_state     <= D_SCAN;
 				end
 			end
 
@@ -781,9 +817,9 @@ always @(posedge clk_sys) begin
 			end
 
 			// Write a 40-char status line at $BB80 (top row): an INK-WHITE
-			// attribute byte, then "DMA <name12> T:<B/M/?> @$XXXX" padded
-			// with spaces. Filename slots beyond what was captured are
-			// padded with spaces.
+			// attribute byte, then "DMA <name12> T:<B/M/?> @$XXXX xN"
+			// padded with spaces. Name/type/start are the FIRST segment's;
+			// xN is the total number of segments parsed (hex 1..F).
 			D_STATUS: begin
 				dma_we   <= 1'b1;
 				dma_addr <= 16'hBB80 + {10'd0, dma_status_idx};
@@ -801,15 +837,17 @@ always @(posedge clk_sys) begin
 					6'd17: dma_data <= " ";
 					6'd18: dma_data <= "T";
 					6'd19: dma_data <= ":";
-					6'd20: dma_data <= (dma_prog_type == 8'h00) ? "B"
-					                 : (dma_prog_type == 8'h80) ? "M" : "?";
+					6'd20: dma_data <= (dma_disp_type == 8'h00) ? "B"
+					                 : (dma_disp_type == 8'h80) ? "M" : "?";
 					6'd21: dma_data <= " ";
 					6'd22: dma_data <= "@";
 					6'd23: dma_data <= "$";
-					6'd24: dma_data <= hex_digit(dma_data_start[15:12]);
-					6'd25: dma_data <= hex_digit(dma_data_start[11:8]);
-					6'd26: dma_data <= hex_digit(dma_data_start[7:4]);
-					6'd27: dma_data <= hex_digit(dma_data_start[3:0]);
+					6'd24: dma_data <= hex_digit(dma_disp_start[15:12]);
+					6'd25: dma_data <= hex_digit(dma_disp_start[11:8]);
+					6'd26: dma_data <= hex_digit(dma_disp_start[7:4]);
+					6'd27: dma_data <= hex_digit(dma_disp_start[3:0]);
+					6'd29: dma_data <= "x";
+					6'd30: dma_data <= hex_digit(dma_seg_count);
 					default: dma_data <= " ";
 				endcase
 				if (dma_status_idx == 6'd39) begin
