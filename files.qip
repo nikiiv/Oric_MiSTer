@@ -7,6 +7,7 @@ set_global_assignment -name VERILOG_FILE rtl/dma_tap_loader.v
 set_global_assignment -name VERILOG_FILE rtl/snap_loader.v
 set_global_assignment -name VERILOG_FILE rtl/cload_handler.v
 set_global_assignment -name VERILOG_FILE rtl/cload_patch_rom.v
+set_global_assignment -name VERILOG_FILE rtl/tap_segment_loader.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wd1793.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/keyboard.sv 
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/joystick.sv 

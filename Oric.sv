@@ -238,7 +238,7 @@ localparam CONF_STR = {
 	"P1O[52],Tape Input,File,ADC;",
 	"P1-;",
 	"P1O[55:54],Joystick Adapter,None,PASE,IJK;",
-	"P1O[56],Smart CLOAD,Off,On;",
+	"P1O[56],Smart CLOAD,On,Off;",
 	"P1-;",
 	"P1O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O[12:10],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%;",
@@ -258,7 +258,7 @@ wire [1:0] tapeVolume  = status[51:50];
 wire       tapeUseADC = status[52];
 wire       tapeRewind = status[53];
 wire [1:0] joystick_adapter = status[55:54];
-wire       smart_cload_en   = status[56];
+wire       smart_cload_en   = ~status[56];  // menu shows On (default) / Off
 
 ///////////////////////////////////////////////////
 
@@ -431,6 +431,11 @@ always @(posedge clk_sys) begin
 		spram_addr <= cload_ram_addr;
 		spram_we <= cload_ram_we;
 	end
+	else if (tap_active) begin
+		spram_d <= tap_ram_data;
+		spram_addr <= tap_ram_addr;
+		spram_we <= tap_ram_we;
+	end
 	else begin
 		spram_d <= ram_d;
 		spram_addr <= ram_ad;
@@ -512,7 +517,7 @@ oricatmos oricatmos
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
 	.sd_din_strobe    (0),
-	.cpu_halt         (dma_active | snap_active | cload_active),
+	.cpu_halt         (dma_active | snap_active | cload_active | tap_active),
 	.cpu_regs_set     (cpu_regs_set),
 	.cpu_regs_set_we  (cpu_regs_set_we),
 	.via_snap_we      (via_snap_we),
@@ -655,6 +660,7 @@ spram #(.address_width(16)) tapecache (
 
   .address((ioctl_download && any_tape_load) ? ioctl_addr :
            dma_active                        ? dma_cache_addr :
+           tap_active                        ? tap_cache_addr :
                                                tape_addr),
   .data(ioctl_dout),
   .wren(ioctl_wr && any_tape_load),
@@ -682,6 +688,34 @@ cassette cassette (
 
   .tape_end(tape_end),
   .data(casdout)
+);
+
+// ---- Multi-stage TAP segment loader (rtl/tap_segment_loader.v) ----
+// Triggered by the patched BASIC CLOAD doing `LDA #$01 / STA $C000`.
+// Pulls one segment per trigger from tapecache into RAM, populates
+// the BASIC-state side effects (start/end pointers, autorun, type,
+// TXTTAB/TXTEND), paints "CLOAD: <name>" at $BB80, releases CPU.
+// Lets multi-segment .tap files load in stages so inter-segment
+// BASIC code (graphics init, etc.) gets to run between calls.
+wire        tap_active;
+wire [15:0] tap_ram_addr;
+wire  [7:0] tap_ram_data;
+wire        tap_ram_we;
+wire [15:0] tap_cache_addr;
+wire        tap_load_pulse = ioctl_downlD && ~ioctl_download && load_tape;
+
+tap_segment_loader tap_seg (
+	.clk_sys        (clk_sys),
+	.reset          (reset),
+	.trigger        (c000_we && c000_data == 8'd1 && smart_cload_en && tape_loaded),
+	.tape_load_pulse(tap_load_pulse),
+	.tape_end       (tape_end),
+	.tape_data      (tape_data),
+	.cache_addr     (tap_cache_addr),
+	.active         (tap_active),
+	.ram_addr       (tap_ram_addr),
+	.ram_data       (tap_ram_data),
+	.ram_we         (tap_ram_we)
 );
 
 // ---- Smart CLOAD POC handler (rtl/cload_handler.v) ----
