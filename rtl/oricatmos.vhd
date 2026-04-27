@@ -587,7 +587,14 @@ BEGIN
 		WAIT UNTIL rising_edge(clk_in);
 	
 		-- Smart CLOAD live ROM patch — wins over every ROM source.
-		IF    cpu_rw = '1' AND ula_phi2 = '1' AND patch_active = '1' THEN
+		-- Gate on ula_CSROMn='0' so we only override during reads
+		-- inside the ROM window ($C000-$FFFF). Without this gate the
+		-- override fires for any low-RAM read whose low 14 bits land
+		-- in the patch range — e.g. cold-boot RAM detection writing/
+		-- reading $285F sees our patch byte instead of RAM, mistakes
+		-- it for end-of-RAM, and reports a tiny BYTES FREE.
+		IF    cpu_rw = '1' AND ula_phi2 = '1' AND patch_active = '1'
+		      AND ula_CSROMn = '0' AND cont_MAPn = '1' AND cont_ROMDISn = '1' THEN
 			cpu_di <= patch_data;
 			-- expansion port
 		ELSIF cpu_rw = '1' AND ula_PHI2 = '1' AND ula_CSIOn = '0' AND cont_IOCONTROLn = '0' THEN
