@@ -14,16 +14,21 @@
 //       later calls — so multi-segment tapes pull one segment per call,
 //       letting BASIC's inter-segment code run between).
 //    3. Walks the tape image looking for sync (0x16) + marker (0x24),
-//       parses the 9-byte header (type@+2, end@+4/+5 BE, start@+6/+7
-//       BE, autorun@+1), reads the null-terminated filename, then
+//       parses the 9-byte header (autorun@+3, type@+2, end@+4/+5 BE,
+//       start@+6/+7 BE), skips the null-terminated filename, then
 //       streams the program payload into main RAM.
 //    4. Writes the BASIC-state side effects the real ROM CLOAD path
 //       would have left behind — start/end addresses at $02A9-$02AC,
-//       autorun + type at $02AD/$02AE, TXTTAB/TXTEND at $9A-$9D for
-//       BASIC programs, and clears the verify error counters at
-//       $025C/$025D.
-//    5. Paints a 40-char status row at $BB80 ("CLOAD: <name>"), drains
-//       the spram pipeline, and releases the CPU.
+//       autorun + type at $02AD/$02AE, TXTTAB at $9A/$9B for BASIC
+//       programs, and clears the verify error counters at $025C/$025D.
+//    5. Drains the spram pipeline, releases the CPU.
+//
+//  We deliberately do NOT paint a status row at $BB80. The ROM at
+//  $E8D3 (JSR $E651) prints filename info to that address natively,
+//  so any extra paint here would be redundant — and harmful for
+//  HIRES programs that use the $BB80-$BFE7 area as their own data,
+//  not a text screen. Stock CLOAD already disturbs that region; we
+//  don't add to it.
 //
 //  Forked from rtl/dma_tap_loader.v — same cache scan / RAM stream
 //  shape, with the per-segment trigger model and a new T_FX state in
@@ -48,16 +53,15 @@ module tap_segment_loader (
 	output reg        ram_we
 );
 
-localparam T_IDLE   = 4'd0,
-           T_INIT   = 4'd1,
-           T_SCAN   = 4'd2,
-           T_WRITE  = 4'd3,
-           T_FX     = 4'd4,
-           T_STATUS = 4'd5,
-           T_DRAIN  = 4'd6,
-           T_DONE   = 4'd7;
+localparam T_IDLE   = 3'd0,
+           T_INIT   = 3'd1,
+           T_SCAN   = 3'd2,
+           T_WRITE  = 3'd3,
+           T_FX     = 3'd4,
+           T_DRAIN  = 3'd5,
+           T_DONE   = 3'd6;
 
-reg  [3:0]  state;
+reg  [2:0]  state;
 reg  [15:0] bot_seg;
 reg         eos;             // saw the 0x24 marker → past sync, parsing header
 reg         name_done;
@@ -66,23 +70,13 @@ reg  [15:0] data_end;
 reg  [15:0] write_addr;
 reg  [7:0]  prog_type;       // header +2
 reg  [7:0]  autorun_byte;    // header +3 (the byte that lands in $02AD per ROM $E4BE loop)
-reg  [7:0]  name_buf [0:11];
-reg  [3:0]  name_pos;
 reg  [3:0]  fx_step;
-reg  [5:0]  status_idx;
 reg  [1:0]  drain_cnt;
 
 // Persistent across triggers — only cleared on reset or new tape.
 reg  [15:0] next_scan_pos;
 
-// True if this trigger ran out of tape before finding a segment.
-reg         no_segment;
-
 wire        type_is_basic = (prog_type == 8'h00);
-
-function automatic [7:0] hex_digit(input [3:0] n);
-	hex_digit = (n < 4'd10) ? (8'h30 + n) : (8'h37 + n);
-endfunction
 
 always @(posedge clk_sys) begin
 	if (reset) begin
@@ -92,7 +86,6 @@ always @(posedge clk_sys) begin
 		next_scan_pos <= 16'd0;
 		eos           <= 1'b0;
 		name_done     <= 1'b0;
-		no_segment    <= 1'b0;
 	end
 	else begin
 		ram_we <= 1'b0;
@@ -109,8 +102,6 @@ always @(posedge clk_sys) begin
 					bot_seg     <= 16'd0;
 					eos         <= 1'b0;
 					name_done   <= 1'b0;
-					name_pos    <= 4'd0;
-					no_segment  <= 1'b0;
 				end
 			end
 
@@ -127,10 +118,11 @@ always @(posedge clk_sys) begin
 			T_SCAN: begin
 				cache_addr <= cache_addr + 16'd1;
 				if (cache_addr > tape_end) begin
-					// Walked off the end without finding a segment.
-					no_segment <= 1'b1;
-					status_idx <= 6'd0;
-					state      <= T_STATUS;
+					// Walked off the end without finding a segment — exit
+					// quietly. ROM's autorun path will see whatever stale
+					// $02xx values were last set; usually a no-op.
+					drain_cnt <= 2'd0;
+					state     <= T_DRAIN;
 				end
 				else if (!eos) begin
 					if (tape_data == 8'h24) begin
@@ -139,21 +131,19 @@ always @(posedge clk_sys) begin
 					end
 				end
 				else begin
-					if (cache_addr - 16'd1 == bot_seg + 16'd3) autorun_byte         <= tape_data;
 					if (cache_addr - 16'd1 == bot_seg + 16'd2) prog_type            <= tape_data;
+					if (cache_addr - 16'd1 == bot_seg + 16'd3) autorun_byte         <= tape_data;
 					if (cache_addr - 16'd1 == bot_seg + 16'd4) data_end[15:8]       <= tape_data;
 					if (cache_addr - 16'd1 == bot_seg + 16'd5) data_end[7:0]        <= tape_data;
 					if (cache_addr - 16'd1 == bot_seg + 16'd6) data_start[15:8]     <= tape_data;
 					if (cache_addr - 16'd1 == bot_seg + 16'd7) data_start[7:0]      <= tape_data;
+					// Skip filename (null-terminated) — we don't need it
+					// since the ROM's $E651 print uses $027F directly.
 					if (cache_addr - 16'd1 >= bot_seg + 16'd9 && !name_done) begin
 						if (tape_data == 8'h00) begin
 							name_done  <= 1'b1;
 							write_addr <= data_start;
 							state      <= T_WRITE;
-						end
-						else if (name_pos < 4'd12) begin
-							name_buf[name_pos] <= tape_data;
-							name_pos           <= name_pos + 4'd1;
 						end
 					end
 				end
@@ -176,15 +166,9 @@ always @(posedge clk_sys) begin
 
 			// BASIC-state side effects — what the real ROM CLOAD path
 			// leaves behind in $02xx and zero-page (per docs/Oric Rom.md
-			// recon at $E4AC and $E89C-$E8B0).
-			//
-			// We write start/end + autorun + type + verify-error
-			// counters here. The patched CLOAD code (cload_patch_rom.v)
-			// runs its own follow-up after our trigger returns:
-			//   $9C/$9D ← $02AB/$02AC (mirror of ROM at $E8E9-$E8F1),
-			//   JSR $C55F (line links),
-			//   then conditional autorun JMP based on $02AD/$02AE.
-			// So we don't duplicate $9C/$9D here.
+			// recon at $E4AC and $E89C-$E8B0). The unpatched ROM at
+			// $E8BC+ reads these to drive the autorun decision and to
+			// copy $02AB/$02AC into $9C/$9D for BASIC programs.
 			//
 			// Steps 0..7 always run. Steps 8..9 ($9A/$9B = TXTTAB) only
 			// run for BASIC-type files.
@@ -205,52 +189,9 @@ always @(posedge clk_sys) begin
 				endcase
 				fx_step <= fx_step + 4'd1;
 				if ((fx_step == 4'd7 && !type_is_basic) || fx_step == 4'd9) begin
-					status_idx <= 6'd0;
-					state      <= T_STATUS;
-				end
-			end
-
-			// Write a 40-char status line at $BB80: an INK-WHITE
-			// attribute byte, then "CLOAD: <name12>" padded with spaces,
-			// or "CLOAD: NO TAPE" if no segment was found.
-			T_STATUS: begin
-				ram_we   <= 1'b1;
-				ram_addr <= 16'hBB80 + {10'd0, status_idx};
-				case (status_idx)
-					6'd0:  ram_data <= 8'h07;
-					6'd1:  ram_data <= "C";
-					6'd2:  ram_data <= "L";
-					6'd3:  ram_data <= "O";
-					6'd4:  ram_data <= "A";
-					6'd5:  ram_data <= "D";
-					6'd6:  ram_data <= ":";
-					6'd7:  ram_data <= " ";
-					6'd8,  6'd9,  6'd10, 6'd11, 6'd12, 6'd13,
-					6'd14, 6'd15, 6'd16, 6'd17, 6'd18, 6'd19:
-						if (no_segment) begin
-							case (status_idx)
-								6'd8:  ram_data <= "N";
-								6'd9:  ram_data <= "O";
-								6'd10: ram_data <= " ";
-								6'd11: ram_data <= "T";
-								6'd12: ram_data <= "A";
-								6'd13: ram_data <= "P";
-								6'd14: ram_data <= "E";
-								default: ram_data <= 8'h20;
-							endcase
-						end
-						else begin
-							ram_data <= ((status_idx - 6'd8) < {2'd0, name_pos})
-							            ? name_buf[status_idx - 6'd8]
-							            : 8'h20;
-						end
-					default: ram_data <= 8'h20;
-				endcase
-				if (status_idx == 6'd39) begin
 					drain_cnt <= 2'd0;
 					state     <= T_DRAIN;
 				end
-				else status_idx <= status_idx + 6'd1;
 			end
 
 			// Hold active for a few cycles so the last write commits

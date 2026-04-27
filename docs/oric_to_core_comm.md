@@ -55,20 +55,29 @@ top level for whatever consumer needs them.
 
 \* The mailbox byte is "deposited" into RAM as a harmless side effect
 unless we override it. For `$C000` (ROM space) the byte never lands
-anywhere; for `$02FE` it lands in dead RAM. Both are equivalent from
-the snoop's point of view.
+anywhere; the snoop sees the bus value regardless.
+
+**Important footgun: don't pick a `$02xx` system-RAM address as a
+mailbox unless you're sure no game code writes there.** An early
+POC used `$02FE` and a corresponding `cload_handler.v` consumer; we
+removed it after Xenon3 (an MC game) happened to issue stray writes
+to `$02FE` in normal play, which spuriously fired the handler and
+painted "CLOAD:…" garbage at `$BB80-$BFE7`, corrupting the screen.
+ROM-space addresses ($C000+) are safer because well-behaved game
+code never writes to them.
 
 ### Examples in this codebase
 
 | Mailbox  | Strobe        | Data carried | Consumer                               |
 | -------- | ------------- | ------------ | -------------------------------------- |
-| `$02FE`  | `cload_we`    | none         | `cload_handler.v` (reads `$027F`, paints `$BB80`) |
-| `$C000`  | `c000_we`     | `c000_data`  | `Oric.sv` `led_user_pokeable` latch → `LED_USER` pin |
+| `$C000`  | `c000_we`     | `c000_data`  | `Oric.sv` `led_user_pokeable` latch → `LED_USER` pin (value 1=on, 0=off); also fires `tap_segment_loader.v` when value==1 + `smart_cload_en` + `tape_loaded` |
 
-The cload mailbox is invoked from a hot-patched ROM trampoline — the
-patched CLOAD entry does `STA $02FE` then RTSes. The LED mailbox is
-invoked from BASIC `POKE #C000, n` directly, since Atmos POKE issues
-an unconditional `STA ($33),Y` (`docs/Oric Rom.md:3333`).
+The `$C000` mailbox is dual-use:
+- BASIC `POKE #C000, 1` lights `LED_USER` (Atmos POKE issues an
+  unconditional `STA ($33),Y` per `docs/Oric Rom.md:3333`).
+- The Smart CLOAD patch ROM at `$E85F-$E8BB` is a NOP-sled ending
+  with `LDA #$01 / STA $C000` — that fires the same mailbox to
+  trigger a tape-segment load via `tap_segment_loader.v`.
 
 ## Pattern B — core → 6502: halt + paint via spram bus
 
@@ -77,10 +86,10 @@ address bus while the CPU is parked. The mux at `Oric.sv:411-432`
 prioritises three loaders, then the CPU:
 
 ```
-if (dma_active)        spram <= dma_*;
-else if (snap_active)  spram <= snap_*;
-else if (cload_active) spram <= cload_*;
-else                   spram <= cpu_*;
+if (dma_active)       spram <= dma_*;
+else if (snap_active) spram <= snap_*;
+else if (tap_active)  spram <= tap_*;
+else                  spram <= cpu_*;
 ```
 
 `*_active` outputs from the loader OR into `oricatmos.cpu_halt`
@@ -94,7 +103,10 @@ Add a new arm by:
 
 ### Reading main RAM (3-cycle pipeline)
 
-`cload_handler.v` is the reference for read-back. Single-port BRAM
+(Historic note: the read-back pattern was originally proven by
+`cload_handler.v` in an early POC; that module has been removed but
+the timing analysis below still applies to anyone adding a new RAM-
+reading loader.) Single-port BRAM
 plus the mux register adds two cycles between "drive ram_addr" and
 "sample ram_q":
 
@@ -111,11 +123,11 @@ to land on the right cycle. Writing is one cycle simpler — drive
 
 ### Examples
 
-| Module                  | What it does                                          |
-| ----------------------- | ----------------------------------------------------- |
-| `dma_tap_loader.v`      | Streams a `.tap` image into RAM, paints `$BB80`.       |
-| `snap_loader.v`         | Restores `.sna` snapshot — RAM, AY, VIA register file. |
-| `cload_handler.v`       | Reads `$027F` filename + paints `CLOAD: <name>` at `$BB80`. |
+| Module                   | What it does                                          |
+| ------------------------ | ----------------------------------------------------- |
+| `dma_tap_loader.v`       | Streams a `.tap` image into RAM, paints `$BB80`.       |
+| `snap_loader.v`          | Restores `.sna` snapshot — RAM, AY, VIA register file. |
+| `tap_segment_loader.v`   | Smart CLOAD per-segment loader; populates `$02A9-$02AE` so the ROM's autorun path takes over. |
 
 ## Pattern C — core → 6502: read-side ROM override (no halt)
 
@@ -171,7 +183,7 @@ The same shape extends to multi-bit registers (e.g. an 8-bit
 | -------------------------- | ------------------------------------------------------------------- |
 | `rtl/oricatmos.vhd`        | All bus decodes (cpu_rw / cpu_ad / cpu_do / ula_phi2). New mailbox = new decode here. |
 | `Oric.sv`                  | Top-level wiring; spram mux; cpu_halt OR-chain; status bits; pin assigns. |
-| `rtl/cload_handler.v`      | Pattern B reference (halt + read RAM + paint).                      |
+| `rtl/tap_segment_loader.v` | Pattern B example (halt + cache scan + RAM stream + side-effect writes). |
 | `rtl/cload_patch_rom.v`    | Pattern C reference (ROM-read override).                            |
 | `rtl/dma_tap_loader.v`, `rtl/snap_loader.v` | Older Pattern B users; same halt/paint shape.   |
 

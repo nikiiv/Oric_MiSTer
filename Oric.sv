@@ -426,11 +426,6 @@ always @(posedge clk_sys) begin
 		spram_addr <= snap_ram_addr;
 		spram_we <= snap_ram_we;
 	end
-	else if (cload_active) begin
-		spram_d <= cload_ram_data;
-		spram_addr <= cload_ram_addr;
-		spram_we <= cload_ram_we;
-	end
 	else if (tap_active) begin
 		spram_d <= tap_ram_data;
 		spram_addr <= tap_ram_addr;
@@ -517,7 +512,7 @@ oricatmos oricatmos
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
 	.sd_din_strobe    (0),
-	.cpu_halt         (dma_active | snap_active | cload_active | tap_active),
+	.cpu_halt         (dma_active | snap_active | tap_active),
 	.cpu_regs_set     (cpu_regs_set),
 	.cpu_regs_set_we  (cpu_regs_set_we),
 	.via_snap_we      (via_snap_we),
@@ -537,7 +532,6 @@ oricatmos oricatmos
 	.ay_snap_data     (ay_snap_data),
 	.ay_snap_creg_we  (ay_snap_creg_we),
 	.ay_snap_creg     (ay_snap_creg),
-	.cload_we         (cload_we),
 	.patch_active     (cload_patch_active),
 	.patch_data       (cload_patch_data),
 	.c000_we          (c000_we),
@@ -718,16 +712,6 @@ tap_segment_loader tap_seg (
 	.ram_we         (tap_ram_we)
 );
 
-// ---- Smart CLOAD POC handler (rtl/cload_handler.v) ----
-// Trapped on a write to $02FE (the patched BIOS does STA $02FE);
-// halts the CPU, walks the filename buffer at $027F, paints the
-// status row at $BB80 with "CLOAD: <name>", releases the CPU.
-wire        cload_active;
-wire [15:0] cload_ram_addr;
-wire  [7:0] cload_ram_data;
-wire        cload_ram_we;
-wire        cload_we;
-
 // Host LED mailbox: oricatmos.vhd snoops CPU writes to $C000 and
 // emits c000_we (1-cycle strobe) + c000_data (the byte being
 // written). led_user_pokeable latches the bit: data==1 sets,
@@ -743,16 +727,6 @@ always @(posedge clk_sys) begin
 		else if (c000_data == 8'd0) led_user_pokeable <= 1'b0;
 	end
 end
-cload_handler cload_handler (
-	.clk_sys (clk_sys),
-	.reset   (reset),
-	.cload_we(cload_we),
-	.ram_q   (ram_q),
-	.active  (cload_active),
-	.ram_addr(cload_ram_addr),
-	.ram_data(cload_ram_data),
-	.ram_we  (cload_ram_we)
-);
 
 // ---- DMA TAP loader (rtl/dma_tap_loader.v) ----
 dma_tap_loader dma_loader (
