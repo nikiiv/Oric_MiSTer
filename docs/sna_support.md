@@ -6,12 +6,12 @@ signals, and the current implementation status.
 
 ## Status
 
-| Direction | State                                                               |
-| --------- | ------------------------------------------------------------------- |
-| **LOAD**  | Working: RAM, CPU, AY register file + creg, VIA register file (12). |
-| **SAVE**  | Not started.                                                        |
+| Direction | State                                                                                  |
+| --------- | -------------------------------------------------------------------------------------- |
+| **LOAD**  | Working: RAM, CPU, AY register file + creg, VIA register file (12) + timers + IFR.     |
+| **SAVE**  | Not started.                                                                           |
 
-LOAD was built in two passes:
+LOAD was built in three passes:
 
 - **v1** restored 64 KiB main RAM and the 6502 register file
   (PC/A/X/Y/S/P). Audio reset to silence and VIA-driven IRQs re-armed
@@ -20,10 +20,21 @@ LOAD was built in two passes:
   (with current-register select) and 12 of the 16 VIA registers (ORA,
   ORB, DDRA, DDRB, T1L_L/H, T2L_L/H, SR, ACR, PCR, IER). Audio resumes
   with the captured tones, and VIA timer IRQs run at the right cadence.
+- **v3** added VIA internal-state restore: live T1C/T2C counters, the
+  t1run/t2run active flags, and the IFR per-source IRQ flags
+  (t1_irq/t2_irq/ca1/ca2/cb1/cb2/sr_irq). Required for snapshots taken
+  mid-frame on games that pace music/animation off VIA T1 IRQs (e.g.
+  Xenon3) — without v3 the timer phase resets to the latch on resume
+  and the game freezes on the first screen change. Critical bug found
+  and fixed during v3: T1C/T2C are encoded **big-endian** in the .sna
+  file (Oricutron's `putu16` writes high byte first — see
+  `snapshot.c:67-74`); our initial little-endian capture loaded
+  garbage values like `$3412` for a snap-time `$1234` and the timer
+  restore appeared inert until the byte order was corrected.
 
 What's intentionally **not** restored — see [what's not yet
-implemented](#whats-not-yet-implemented) for the rationale and v3
-candidate list.
+implemented](#whats-not-yet-implemented) for the rationale and the
+remaining v4 candidate list.
 
 ## Why snapshots
 
@@ -100,13 +111,14 @@ symbol blocks (`SYR`, `SYU`, `SY0..SY7`), breakpoints (`BKP`).
 
 For each block, fields are marked with their LOAD status:
 
-- **[done]** — restored by v1 or v2 LOAD
+- **[done]** — restored by v1, v2, or v3 LOAD
 - **[skip]** — intentionally not restored (Oricutron-internal scratch
   that's regenerated, derived from other state we do restore, or
   controller/Telestrat fields irrelevant to Atmos v1)
-- **[v3]** — candidate for v3: live timer counters, AY oscillator
-  phase, VIA shift-register count, etc. Currently skipped, and the
-  program glitches briefly on resume because of it
+- **[v4]** — candidate for v4: AY oscillator phase, VIA
+  shift-register count, etc. Currently skipped; the program may glitch
+  briefly on resume in audio waveform position or mid-shift SR
+  state, but neither is known to break gameplay
 
 #### `OSN\0` (21 bytes)
 
@@ -165,7 +177,7 @@ Authoritative order from `snapshot.c:286-320`.
 
 | Off | Size | Field          | Source                                                                                          |
 | --- | ---- | -------------- | ----------------------------------------------------------------------------------------------- |
-| 0   | 1    | IFR            | **[skip]** computed from source IRQ flags (t1_irq, t2_irq, etc.) — no direct write path in chip |
+| 0   | 1    | IFR            | **[done]** v3 — `snap_ifr_we` strobe overrides the 7 source IRQ flags (t1_irq/t2_irq/sr_irq/cb1/cb2/ca1/ca2) across 4 processes; bit 7 IRQ-summary is recomputed combinationally |
 | 1   | 1    | IRB            | **[skip]** input shadow                                                                         |
 | 2   | 1    | ORB            | **[done]** → snap_we addr `$0`                                                                  |
 | 3   | 1    | IRBL (latched) | **[skip]** input shadow                                                                         |
@@ -176,10 +188,10 @@ Authoritative order from `snapshot.c:286-320`.
 | 8   | 1    | DDRB           | **[done]** → snap_we addr `$2`                                                                  |
 | 9   | 1    | T1L_L          | **[done]** → snap_we addr `$4` (latch only — snap branch doesn't fire t1_load_counter)          |
 | 10  | 1    | T1L_H          | **[done]** → snap_we addr `$5` (latch only)                                                     |
-| 11  | 2    | T1C            | **[v3]** live counter — without restore, T1 IRQ fires at the wrong moment until the program re-arms |
+| 11  | 2    | T1C            | **[done]** v3 — `snap_t1c_we` strobe writes `t1c` directly (BE: hi@+11, lo@+12)                 |
 | 13  | 1    | T2L_L          | **[done]** → snap_we addr `$8`                                                                  |
 | 14  | 1    | T2L_H          | **[done]** → snap_we addr `$9`                                                                  |
-| 15  | 2    | T2C            | **[v3]** live counter                                                                           |
+| 15  | 2    | T2C            | **[done]** v3 — `snap_t2c_we` strobe writes `t2c` directly (BE: hi@+15, lo@+16)                 |
 | 17  | 1    | SR             | **[done]** → snap_we addr `$A` (direct write, bypasses sr_write_ena)                            |
 | 18  | 1    | ACR            | **[done]** → snap_we addr `$B`                                                                  |
 | 19  | 1    | PCR            | **[done]** → snap_we addr `$C`                                                                  |
@@ -188,12 +200,12 @@ Authoritative order from `snapshot.c:286-320`.
 | 22  | 1    | CA2            | **[skip]** line state                                                                           |
 | 23  | 1    | CB1            | **[skip]** line state                                                                           |
 | 24  | 1    | CB2            | **[skip]** line state                                                                           |
-| 25  | 1    | SR count       | **[v3]** mid-shift count                                                                        |
+| 25  | 1    | SR count       | **[v4]** mid-shift count                                                                        |
 | 26  | 1    | T1 reload      | **[skip]** Oricutron scratch                                                                    |
 | 27  | 1    | T2 reload      | **[skip]** Oricutron scratch                                                                    |
 | 28  | 2    | SR time        | **[skip]** Oricutron scratch                                                                    |
-| 30  | 1    | T1 run         | **[v3]** active flag                                                                            |
-| 31  | 1    | T2 run         | **[v3]** active flag                                                                            |
+| 30  | 1    | T1 run         | **[done]** v3 — `snap_t_active_we` strobe writes `t1c_active`                                   |
+| 31  | 1    | T2 run         | **[done]** v3 — `snap_t_active_we` strobe writes `t2c_active`                                   |
 | 32  | 1    | CA2 pulse      | **[skip]**                                                                                      |
 | 33  | 1    | CB2 pulse      | **[skip]**                                                                                      |
 | 34  | 1    | SR trigger     | **[skip]**                                                                                      |
@@ -213,29 +225,29 @@ Authoritative order from `snapshot.c:251-283`. NUM_AY_REGS = 15
 | 25  | 12   | 3 tone periods (u32 each)                            | **[skip]** derived from regs 0-5 (already restored)          |
 | 37  | 4    | noise period (u32)                                   | **[skip]** derived from reg 6                                |
 | 41  | 4    | envelope period (u32)                                | **[skip]** derived from regs 11-12                           |
-| 45  | 18   | per-channel `tonebit/noisebit/vol` (u16×3 each)      | **[v3]** per-channel oscillator phase                        |
+| 45  | 18   | per-channel `tonebit/noisebit/vol` (u16×3 each)      | **[v4]** per-channel oscillator phase                        |
 | 63  | 2    | newout                                               | **[skip]** Oricutron audio-rendering scratch                 |
-| 65  | 12   | per-channel timer `ct[3]` (u32 each)                 | **[v3]** tone counters (`a/b/c_count`)                       |
-| 77  | 4    | noise timer `ctn` (u32)                              | **[v3]** noise counter (`n_count`)                           |
-| 81  | 4    | envelope timer `cte` (u32)                           | **[v3]** envelope counter                                    |
+| 65  | 12   | per-channel timer `ct[3]` (u32 each)                 | **[v4]** tone counters (`a/b/c_count`)                       |
+| 77  | 4    | noise timer `ctn` (u32)                              | **[v4]** noise counter (`n_count`)                           |
+| 81  | 4    | envelope timer `cte` (u32)                           | **[v4]** envelope counter                                    |
 | 85  | 48   | per-channel `tonepos/tonestep/sign/out` (u32×4 each) | **[skip]** Oricutron audio-rendering scratch                 |
-| 133 | 4    | envelope position                                    | **[v3]** envelope phase                                      |
-| 137 | 4    | current noise value                                  | **[v3]** noise LFSR                                          |
-| 141 | 4    | RNG rack (`rndrack`)                                 | **[v3]** noise LFSR                                          |
+| 133 | 4    | envelope position                                    | **[v4]** envelope phase                                      |
+| 137 | 4    | current noise value                                  | **[v4]** noise LFSR                                          |
+| 141 | 4    | RNG rack (`rndrack`)                                 | **[v4]** noise LFSR                                          |
 | 145 | 4    | key bit delay                                        | **[skip]**                                                   |
 | 149 | 4    | current key offset                                   | **[skip]**                                                   |
 
 The 15 AY registers + creg cover the audible-state restore; everything
 else in this block is either Oricutron audio-rendering scratch
-(regenerated) or live oscillator/envelope state (a v3 candidate — would
+(regenerated) or live oscillator/envelope state (a v4 candidate — would
 need internal `*_count` and `*_ff` signals plumbed out of `psg.v`).
 
 ### Whole blocks we ignore on LOAD
 
 - **Tape state (`TAP`)** — tape is irrelevant once a program is loaded.
 - **ROM patches (`PCH`)** — Oricutron's fast-disk/fast-tape patches; n/a.
-- **Disk controller blocks** (`MDC`, `WDD`, `JSM`, `PRV`, `DSK`) — no disk in v1/v2.
-- **Telestrat blocks** (`BNK`, `ACI`, `AUX`, `TVA`) — Atmos only in v1/v2.
+- **Disk controller blocks** (`MDC`, `WDD`, `JSM`, `PRV`, `DSK`) — no disk support yet.
+- **Telestrat blocks** (`BNK`, `ACI`, `AUX`, `TVA`) — Atmos-only core.
 - **Debug blocks** (`SYR`, `SYU`, `BKP`) — never relevant.
 
 These all dispatch to `S_SKIP` in the LOAD state machine: read the size,
@@ -275,6 +287,15 @@ the 256 KiB cap; no compression needed.
   the AY) with parallel write branches in each chip's existing
   register-write process. Restore drives them from `Oric.sv` — no bus
   muxing required at the oricatmos level.
+- **VIA timer + IFR restore (v3):** four extra strobes on `m6522.vhd`
+  — `snap_t1c_we` (16-bit data), `snap_t2c_we` (16-bit data),
+  `snap_t_active_we` (writes `t1c_active`/`t2c_active`), and
+  `snap_ifr_we` (7-bit data, one bit per IRQ source). The IFR strobe
+  has to fire from inside four different processes (`p_timer1`,
+  `p_timer2`, `p_ca_cb_irq`, and the SR process) because each owns
+  its own source-IRQ register. After the v2 register apply finishes,
+  `snap_loader.v` enters `S_APPLY_VIA_TIMERS` and pulses the four
+  strobes one cycle each before moving on to AY apply.
 - **Debug visibility:** optional `SNAP_DEBUG` Verilog macro paints the
   captured CPU regs at row 10 of the text screen so you can verify the
   decoder visually. Turn it on with `tools/oric-build --snap-debug`;
@@ -282,24 +303,28 @@ the 256 KiB cap; no compression needed.
 
 ## What's not yet implemented
 
-### v3 candidates (all flagged **[v3]** in the field tables above)
+### v4 candidates (all flagged **[v4]** in the field tables above)
 
-- **VIA live counters** (`T1C`, `T2C`) — without these the next timer
-  IRQ fires at the wrong moment. Most games re-arm T1 each frame, so
-  the visible glitch is brief.
-- **VIA shift-register count + active flags** — affects programs that
-  resume mid-shift, rare on Atmos.
+- **VIA shift-register count** (offset 25) — affects programs that
+  resume mid-shift. Rare on Atmos; not implemented.
 - **AY oscillator state** — tone counters (`a/b/c_count`), tone
   flip-flops (`a/b/c_ff`), noise counter and LFSR, envelope phase. Not
   restoring these means the first audio frame after resume has the
   right tone/volume but slightly wrong waveform position; usually
-  inaudible after a few ms.
-- **VIA IFR direct restore** — IFR bits are continuously driven by the
-  source IRQ flags (`t1_irq`, `cb1_irq`, etc.), so a direct write
-  doesn't stick. Restoring IFR properly requires writing to those
-  source flags, which lives across multiple processes in `m6522.vhd`.
-  Any IRQ pending at snap time gets refired/discarded in the first few
-  cycles after resume.
+  inaudible after a few ms. Would need internal `*_count` and `*_ff`
+  signals plumbed out of `psg.v`.
+
+### v3 work that explicitly skipped some fields
+
+- **OSN +9 vsync countdown** — Oricutron tracks where in the
+  current frame it is so VIA CB1 fires at exactly the right line. Our
+  ULA generates VSYNC from its own line counter and the visible glitch
+  on resume is one frame at most, so we don't restore it.
+- **OSN +16 vid_mode** — ULA mode bits are derived from RAM
+  attributes per scanline, so this is regenerated automatically.
+- **CPU +12 nmi / +18 irq flags** — the T65 re-derives these from the
+  VIA O_IRQ_L line on the next cycle after resume; there's no benefit
+  to forcing them.
 
 ### SAVE direction (entirely unimplemented)
 
@@ -352,7 +377,13 @@ python3 tools/sna-inspect.py path/to/snapshot.sna
 4. **v2 hardware test** — same snapshots reloaded after AY/VIA register
    restore landed. Audio resumes with the captured tones; VIA-driven
    IRQs run at the right cadence. **DONE.**
-5. **SAVE round-trip** — save snapshot from MiSTer, load it in
+5. **v3 hardware test** — Xenon3 snapshot. Pre-v3 the game froze on
+   the first screen change because T1 IRQ pacing was off. With v2
+   register state alone the freeze persisted. With v3 (T1C/T2C/run
+   flags + IFR restore) the game resumes and runs cleanly. The
+   T1C/T2C big-endian fix was the load-bearing change — earlier v3
+   builds with little-endian capture appeared inert. **DONE.**
+6. **SAVE round-trip** — save snapshot from MiSTer, load it in
    Oricutron (and the reverse), verify the program continues running
    visually/audibly. **NOT DONE** — SAVE direction not yet implemented.
 

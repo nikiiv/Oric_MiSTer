@@ -511,6 +511,15 @@ oricatmos oricatmos
 	.via_snap_we      (via_snap_we),
 	.via_snap_addr    (via_snap_addr),
 	.via_snap_data    (via_snap_data),
+	.via_snap_t1c_we      (via_snap_t1c_we),
+	.via_snap_t1c_data    (via_snap_t1c_data),
+	.via_snap_t2c_we      (via_snap_t2c_we),
+	.via_snap_t2c_data    (via_snap_t2c_data),
+	.via_snap_t_active_we (via_snap_t_active_we),
+	.via_snap_t1_active   (via_snap_t1_active),
+	.via_snap_t2_active   (via_snap_t2_active),
+	.via_snap_ifr_we      (via_snap_ifr_we),
+	.via_snap_ifr_data    (via_snap_ifr_data),
 	.ay_snap_we       (ay_snap_we),
 	.ay_snap_addr     (ay_snap_addr),
 	.ay_snap_data     (ay_snap_data),
@@ -675,6 +684,15 @@ wire        cpu_regs_set_we;
 wire        via_snap_we;
 wire  [3:0] via_snap_addr;
 wire  [7:0] via_snap_data;
+wire        via_snap_t1c_we;
+wire [15:0] via_snap_t1c_data;
+wire        via_snap_t2c_we;
+wire [15:0] via_snap_t2c_data;
+wire        via_snap_t_active_we;
+wire        via_snap_t1_active;
+wire        via_snap_t2_active;
+wire        via_snap_ifr_we;
+wire  [6:0] via_snap_ifr_data;
 wire        ay_snap_we;
 wire  [3:0] ay_snap_addr;
 wire  [7:0] ay_snap_data;
@@ -699,6 +717,15 @@ snap_loader snap_loader (
 	.via_snap_we     (via_snap_we),
 	.via_snap_addr   (via_snap_addr),
 	.via_snap_data   (via_snap_data),
+	.via_snap_t1c_we      (via_snap_t1c_we),
+	.via_snap_t1c_data    (via_snap_t1c_data),
+	.via_snap_t2c_we      (via_snap_t2c_we),
+	.via_snap_t2c_data    (via_snap_t2c_data),
+	.via_snap_t_active_we (via_snap_t_active_we),
+	.via_snap_t1_active   (via_snap_t1_active),
+	.via_snap_t2_active   (via_snap_t2_active),
+	.via_snap_ifr_we      (via_snap_ifr_we),
+	.via_snap_ifr_data    (via_snap_ifr_data),
 	.ay_snap_we      (ay_snap_we),
 	.ay_snap_addr    (ay_snap_addr),
 	.ay_snap_data    (ay_snap_data),
