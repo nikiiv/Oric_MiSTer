@@ -134,7 +134,13 @@ ENTITY oricatmos IS
 		-- Smart CLOAD live ROM patch: when patch_active='1', the CPU
 		-- reads patch_data instead of the selected ROM source.
 		patch_active    : IN  STD_LOGIC := '0';
-		patch_data      : IN  STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0')
+		patch_data      : IN  STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+
+		-- Host LED mailbox snoop: c000_we pulses when the CPU writes
+		-- to $C000; c000_data carries the byte being written. Driven
+		-- to the MiSTer USER LED in Oric.sv.
+		c000_we         : OUT STD_LOGIC;
+		c000_data       : OUT STD_LOGIC_VECTOR(7 DOWNTO 0)
 	);
 END;
 
@@ -564,6 +570,16 @@ BEGIN
 	                 AND cpu_rw = '0'
 	                 AND cpu_ad(15 DOWNTO 0) = X"02FE"
 	            ELSE '0';
+
+	-- Host LED mailbox: snoop CPU writes to $C000. $C000 is in the
+	-- ROM read-window (read returns the ROM byte $4C, untouched);
+	-- the write side is a side-channel — POKE/STA reaches the bus
+	-- regardless of ROM, and Oric.sv latches the value.
+	c000_we <= '1' WHEN ula_phi2 = '1'
+	                AND cpu_rw = '0'
+	                AND cpu_ad(15 DOWNTO 0) = X"C000"
+	           ELSE '0';
+	c000_data <= cpu_do;
 
 
 	PROCESS BEGIN
