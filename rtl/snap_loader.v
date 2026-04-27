@@ -42,6 +42,22 @@ module snap_loader (
 	output reg  [3:0] via_snap_addr,
 	output reg  [7:0] via_snap_data,
 
+	// VIA timer internal state (T1C/T2C live counters + run flags).
+	// Required for snapshots taken mid-frame on games that drive
+	// music/animation off VIA T1 IRQs (e.g. Xenon3) — without these
+	// the timer phase resets to the latch on restore and IRQ pacing
+	// is wrong.
+	output reg        via_snap_t1c_we,
+	output reg [15:0] via_snap_t1c_data,
+	output reg        via_snap_t2c_we,
+	output reg [15:0] via_snap_t2c_data,
+	output reg        via_snap_t_active_we,
+	output reg        via_snap_t1_active,
+	output reg        via_snap_t2_active,
+
+	output reg        via_snap_ifr_we,
+	output reg  [6:0] via_snap_ifr_data,
+
 	output reg        ay_snap_we,
 	output reg  [3:0] ay_snap_addr,
 	output reg  [7:0] ay_snap_data,
@@ -65,21 +81,22 @@ always @(posedge clk_sys) if (load_sna && ioctl_download) snap_end <= ioctl_addr
 
 wire snap_trigger = ioctl_downlD && ~ioctl_download && load_sna;
 
-localparam S_IDLE         = 4'd0,
-           S_INIT         = 4'd1,
-           S_HDR_TAG      = 4'd2,
-           S_HDR_SIZE     = 4'd3,
-           S_BLK_DATA_RAM = 4'd4,
-           S_BLK_CPU      = 4'd5,
-           S_BLK_AY       = 4'd6,
-           S_BLK_VIA      = 4'd7,
-           S_SKIP         = 4'd8,
-           S_APPLY_VIA    = 4'd9,
-           S_APPLY_AY     = 4'd10,
-           S_APPLY_CPU    = 4'd11,
-           S_DRAIN        = 4'd12,
-           S_DONE         = 4'd13,
-           S_DEBUG_PAINT  = 4'd14;
+localparam S_IDLE             = 4'd0,
+           S_INIT             = 4'd1,
+           S_HDR_TAG          = 4'd2,
+           S_HDR_SIZE         = 4'd3,
+           S_BLK_DATA_RAM     = 4'd4,
+           S_BLK_CPU          = 4'd5,
+           S_BLK_AY           = 4'd6,
+           S_BLK_VIA          = 4'd7,
+           S_SKIP             = 4'd8,
+           S_APPLY_VIA        = 4'd9,
+           S_APPLY_VIA_TIMERS = 4'd10,
+           S_APPLY_AY         = 4'd11,
+           S_APPLY_CPU        = 4'd12,
+           S_DRAIN            = 4'd13,
+           S_DONE             = 4'd14,
+           S_DEBUG_PAINT      = 4'd15;
 
 reg  [3:0]  snap_state;
 reg  [1:0]  hdr_byte_cnt;
@@ -97,6 +114,14 @@ reg  [3:0]  snap_ay_creg;
 
 // VIA register file (12 we restore — see comment in S_BLK_VIA below)
 reg  [7:0]  snap_via_regs [0:11];
+
+// VIA timer internals captured from snapshot: T1C lo/hi + T2C lo/hi
+// + t1run + t2run (Oricutron VIA block offsets 11/12/15/16/30/31).
+reg  [15:0] snap_via_t1c;
+reg  [15:0] snap_via_t2c;
+reg         snap_via_t1run;
+reg         snap_via_t2run;
+reg  [7:0]  snap_via_ifr;     // Oricutron VIA block offset 0
 
 reg  [3:0]  snap_apply_cnt;
 reg  [9:0]  snap_drain_cnt;
@@ -119,20 +144,28 @@ localparam [31:0] TAG_VIA  = 32'h56494100; // "VIA\0"
 
 always @(posedge clk_sys) begin
 	if (reset) begin
-		snap_state      <= S_IDLE;
-		active          <= 1'b0;
-		ram_we          <= 1'b0;
-		cpu_regs_set_we <= 1'b0;
-		via_snap_we     <= 1'b0;
-		ay_snap_we      <= 1'b0;
-		ay_snap_creg_we <= 1'b0;
+		snap_state           <= S_IDLE;
+		active               <= 1'b0;
+		ram_we               <= 1'b0;
+		cpu_regs_set_we      <= 1'b0;
+		via_snap_we          <= 1'b0;
+		via_snap_t1c_we      <= 1'b0;
+		via_snap_t2c_we      <= 1'b0;
+		via_snap_t_active_we <= 1'b0;
+		via_snap_ifr_we      <= 1'b0;
+		ay_snap_we           <= 1'b0;
+		ay_snap_creg_we      <= 1'b0;
 	end
 	else begin
-		ram_we          <= 1'b0;
-		cpu_regs_set_we <= 1'b0;
-		via_snap_we     <= 1'b0;
-		ay_snap_we      <= 1'b0;
-		ay_snap_creg_we <= 1'b0;
+		ram_we               <= 1'b0;
+		cpu_regs_set_we      <= 1'b0;
+		via_snap_we          <= 1'b0;
+		via_snap_t1c_we      <= 1'b0;
+		via_snap_t2c_we      <= 1'b0;
+		via_snap_t_active_we <= 1'b0;
+		via_snap_ifr_we      <= 1'b0;
+		ay_snap_we           <= 1'b0;
+		ay_snap_creg_we      <= 1'b0;
 
 		case (snap_state)
 			S_IDLE: begin
@@ -280,24 +313,32 @@ always @(posedge clk_sys) begin
 				end
 			end
 
-			// VIA block: capture the 12 registers we restore. Skipped fields:
-			// IFR (computed from source IRQ flags, can't be set directly),
-			// IRB/IRBL/IRA/IRAL (input shadows), T1C/T2C (counters not in v2
-			// scope), various derived bits (CA/CB line states, irqbit, etc.).
+			// VIA block: capture the 12 registers we restore plus timer
+			// internals (T1C/T2C live counters + t1run/t2run flags).
+			// Skipped fields: IFR (computed from source IRQ flags),
+			// IRB/IRBL/IRA/IRAL (input shadows), CA/CB line states,
+			// srcount/srtime/srtrigger, ca2pulse/cb2pulse, irqbit.
 			S_BLK_VIA: begin
 				case (blk_offset[7:0])
+					8'd0:  snap_via_ifr      <= snap_cache_q; // IFR
 					8'd2:  snap_via_regs[0]  <= snap_cache_q; // ORB
 					8'd5:  snap_via_regs[1]  <= snap_cache_q; // ORA
 					8'd7:  snap_via_regs[2]  <= snap_cache_q; // DDRA
 					8'd8:  snap_via_regs[3]  <= snap_cache_q; // DDRB
 					8'd9:  snap_via_regs[4]  <= snap_cache_q; // T1L_L
 					8'd10: snap_via_regs[5]  <= snap_cache_q; // T1L_H
+					8'd11: snap_via_t1c[15:8] <= snap_cache_q; // T1C hi (BE)
+					8'd12: snap_via_t1c[7:0]  <= snap_cache_q; // T1C lo
 					8'd13: snap_via_regs[6]  <= snap_cache_q; // T2L_L
 					8'd14: snap_via_regs[7]  <= snap_cache_q; // T2L_H
+					8'd15: snap_via_t2c[15:8] <= snap_cache_q; // T2C hi (BE)
+					8'd16: snap_via_t2c[7:0]  <= snap_cache_q; // T2C lo
 					8'd17: snap_via_regs[8]  <= snap_cache_q; // SR
 					8'd18: snap_via_regs[9]  <= snap_cache_q; // ACR
 					8'd19: snap_via_regs[10] <= snap_cache_q; // PCR
 					8'd20: snap_via_regs[11] <= snap_cache_q; // IER
+					8'd30: snap_via_t1run    <= snap_cache_q[0]; // t1run flag
+					8'd31: snap_via_t2run    <= snap_cache_q[0]; // t2run flag
 					default: ;
 				endcase
 				snap_cache_addr <= snap_cache_addr + 17'd1;
@@ -400,6 +441,37 @@ always @(posedge clk_sys) begin
 				endcase
 				snap_apply_cnt <= snap_apply_cnt + 4'd1;
 				if (snap_apply_cnt == 4'd11) begin
+					snap_apply_cnt <= 4'd0;
+					snap_state     <= S_APPLY_VIA_TIMERS;
+				end
+			end
+
+			// VIA timer + IFR internal-state apply: pulse the dedicated
+			// strobes that override t1c/t2c/active flags / per-source
+			// IRQ flags inside the VIA processes. One cycle each.
+			S_APPLY_VIA_TIMERS: begin
+				case (snap_apply_cnt)
+					4'd0: begin
+						via_snap_t1c_we   <= 1'b1;
+						via_snap_t1c_data <= snap_via_t1c;
+					end
+					4'd1: begin
+						via_snap_t2c_we   <= 1'b1;
+						via_snap_t2c_data <= snap_via_t2c;
+					end
+					4'd2: begin
+						via_snap_t_active_we <= 1'b1;
+						via_snap_t1_active   <= snap_via_t1run;
+						via_snap_t2_active   <= snap_via_t2run;
+					end
+					4'd3: begin
+						via_snap_ifr_we   <= 1'b1;
+						via_snap_ifr_data <= snap_via_ifr[6:0];
+					end
+					default: ;
+				endcase
+				snap_apply_cnt <= snap_apply_cnt + 4'd1;
+				if (snap_apply_cnt == 4'd3) begin
 					snap_apply_cnt <= 4'd0;
 					snap_state     <= S_APPLY_AY;
 				end

@@ -112,6 +112,15 @@ ENTITY oricatmos IS
 		via_snap_we     : IN STD_LOGIC := '0';
 		via_snap_addr   : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0');
 		via_snap_data   : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
+		via_snap_t1c_we      : IN STD_LOGIC := '0';
+		via_snap_t1c_data    : IN STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+		via_snap_t2c_we      : IN STD_LOGIC := '0';
+		via_snap_t2c_data    : IN STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+		via_snap_t_active_we : IN STD_LOGIC := '0';
+		via_snap_t1_active   : IN STD_LOGIC := '0';
+		via_snap_t2_active   : IN STD_LOGIC := '0';
+		via_snap_ifr_we      : IN STD_LOGIC := '0';
+		via_snap_ifr_data    : IN STD_LOGIC_VECTOR(6 DOWNTO 0) := (OTHERS => '0');
 		ay_snap_we      : IN STD_LOGIC := '0';
 		ay_snap_addr    : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0');
 		ay_snap_data    : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
@@ -395,7 +404,16 @@ BEGIN
 			CLK => CLK_IN,
 			snap_we => via_snap_we,
 			snap_addr => via_snap_addr,
-			snap_data => via_snap_data
+			snap_data => via_snap_data,
+			snap_t1c_we      => via_snap_t1c_we,
+			snap_t1c_data    => via_snap_t1c_data,
+			snap_t2c_we      => via_snap_t2c_we,
+			snap_t2c_data    => via_snap_t2c_data,
+			snap_t_active_we => via_snap_t_active_we,
+			snap_t1_active   => via_snap_t1_active,
+			snap_t2_active   => via_snap_t2_active,
+			snap_ifr_we      => via_snap_ifr_we,
+			snap_ifr_data    => via_snap_ifr_data
 		);
 
 
