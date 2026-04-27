@@ -125,7 +125,16 @@ ENTITY oricatmos IS
 		ay_snap_addr    : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0');
 		ay_snap_data    : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
 		ay_snap_creg_we : IN STD_LOGIC := '0';
-		ay_snap_creg    : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0')
+		ay_snap_creg    : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0');
+
+		-- Smart CLOAD POC: pulses high for one phi2 when CPU writes
+		-- to $02FE. Used by rtl/cload_handler.v.
+		cload_we        : OUT STD_LOGIC;
+
+		-- Smart CLOAD live ROM patch: when patch_active='1', the CPU
+		-- reads patch_data instead of the selected ROM source.
+		patch_active    : IN  STD_LOGIC := '0';
+		patch_data      : IN  STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0')
 	);
 END;
 
@@ -546,13 +555,26 @@ BEGIN
 	PRN_STROBE <= via_pb_out(4);
 	PRN_DATA <= via_pa_out;
 
+	-- Smart CLOAD mailbox: snoop CPU writes to $02FE.
+	-- A RAM address is used (not $03xx) so we avoid the VIA's
+	-- $0300-$03FF mirroring — a write to a $03xx mailbox would
+	-- also land on a VIA register and toggle ORB/printer/relay.
+	-- The byte deposited at $02FE is harmless dead RAM.
+	cload_we <= '1' WHEN ula_phi2 = '1'
+	                 AND cpu_rw = '0'
+	                 AND cpu_ad(15 DOWNTO 0) = X"02FE"
+	            ELSE '0';
+
 
 	PROCESS BEGIN
 
 		WAIT UNTIL rising_edge(clk_in);
 	
-		-- expansion port
-		IF    cpu_rw = '1' AND ula_PHI2 = '1' AND ula_CSIOn = '0' AND cont_IOCONTROLn = '0' THEN
+		-- Smart CLOAD live ROM patch — wins over every ROM source.
+		IF    cpu_rw = '1' AND ula_phi2 = '1' AND patch_active = '1' THEN
+			cpu_di <= patch_data;
+			-- expansion port
+		ELSIF cpu_rw = '1' AND ula_PHI2 = '1' AND ula_CSIOn = '0' AND cont_IOCONTROLn = '0' THEN
 			cpu_di <= cont_D_OUT;
 			-- VIA
 		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND ula_CSIOn = '0' AND cont_IOCONTROLn = '1' THEN

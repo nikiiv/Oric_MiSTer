@@ -238,6 +238,7 @@ localparam CONF_STR = {
 	"P1O[52],Tape Input,File,ADC;",
 	"P1-;",
 	"P1O[55:54],Joystick Adapter,None,PASE,IJK;",
+	"P1O[56],Smart CLOAD,Off,On;",
 	"P1-;",
 	"P1O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O[12:10],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%;",
@@ -257,6 +258,7 @@ wire [1:0] tapeVolume  = status[51:50];
 wire       tapeUseADC = status[52];
 wire       tapeRewind = status[53];
 wire [1:0] joystick_adapter = status[55:54];
+wire       smart_cload_en   = status[56];
 
 ///////////////////////////////////////////////////
 
@@ -424,6 +426,11 @@ always @(posedge clk_sys) begin
 		spram_addr <= snap_ram_addr;
 		spram_we <= snap_ram_we;
 	end
+	else if (cload_active) begin
+		spram_d <= cload_ram_data;
+		spram_addr <= cload_ram_addr;
+		spram_we <= cload_ram_we;
+	end
 	else begin
 		spram_d <= ram_d;
 		spram_addr <= ram_ad;
@@ -505,7 +512,7 @@ oricatmos oricatmos
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
 	.sd_din_strobe    (0),
-	.cpu_halt         (dma_active | snap_active),
+	.cpu_halt         (dma_active | snap_active | cload_active),
 	.cpu_regs_set     (cpu_regs_set),
 	.cpu_regs_set_we  (cpu_regs_set_we),
 	.via_snap_we      (via_snap_we),
@@ -524,7 +531,10 @@ oricatmos oricatmos
 	.ay_snap_addr     (ay_snap_addr),
 	.ay_snap_data     (ay_snap_data),
 	.ay_snap_creg_we  (ay_snap_creg_we),
-	.ay_snap_creg     (ay_snap_creg)
+	.ay_snap_creg     (ay_snap_creg),
+	.cload_we         (cload_we),
+	.patch_active     (cload_patch_active),
+	.patch_data       (cload_patch_data)
 );
 
 
@@ -586,6 +596,21 @@ spram #(.address_width(14)) altbios (
   .data(ioctl_dout),
   .wren(ioctl_wr && load_alt_bios),
   .q(bios_din)
+);
+
+// Smart CLOAD: live read-side override. cload_patch_rom watches the
+// CPU address bus and asserts patch_active when smart_cload_en is on
+// AND the address falls inside one of its patch ranges. oricatmos.vhd
+// substitutes patch_data for cpu_di in that case — works for the
+// built-in Atmos/Oric 1 ROMs and the loadable BIOS alike, no ioctl
+// re-load required.
+wire        cload_patch_active;
+wire  [7:0] cload_patch_data;
+cload_patch_rom cload_patch_rom (
+	.enable      (smart_cload_en),
+	.rom_addr    (bios_addr[13:0]),
+	.patch_active(cload_patch_active),
+	.patch_data  (cload_patch_data)
 );
 
 ///////////////////////////////////////////////////
@@ -655,6 +680,26 @@ cassette cassette (
 
   .tape_end(tape_end),
   .data(casdout)
+);
+
+// ---- Smart CLOAD POC handler (rtl/cload_handler.v) ----
+// Trapped on a write to $02FE (the patched BIOS does STA $02FE);
+// halts the CPU, walks the filename buffer at $027F, paints the
+// status row at $BB80 with "CLOAD: <name>", releases the CPU.
+wire        cload_active;
+wire [15:0] cload_ram_addr;
+wire  [7:0] cload_ram_data;
+wire        cload_ram_we;
+wire        cload_we;
+cload_handler cload_handler (
+	.clk_sys (clk_sys),
+	.reset   (reset),
+	.cload_we(cload_we),
+	.ram_q   (ram_q),
+	.active  (cload_active),
+	.ram_addr(cload_ram_addr),
+	.ram_data(cload_ram_data),
+	.ram_we  (cload_ram_we)
 );
 
 // ---- DMA TAP loader (rtl/dma_tap_loader.v) ----
