@@ -1,44 +1,52 @@
 //============================================================================
-//  Smart CLOAD patch ROM — live read-side override
+//  Smart CLOAD patch ROM — live read-side override (NOP-sled design)
 //
 //  Sits on the CPU read bus and substitutes patch bytes for specific
-//  ROM addresses when smart_cload_en is high. Implemented as a plain
-//  case statement — adding more patch ranges (or replacing the entire
-//  CLOAD body with a 200-byte routine) is just adding more case rows.
+//  ROM addresses when smart_cload_en is high.
 //
-//  Current payload: 36 bytes at $E85F..$E882 that hijack the Atmos
-//  CLOAD handler. Original sequence at $E85B is
-//      $E85B  PHP / JSR $E7B2 / LDA $02AD / ORA $02AE / BNE $E871 / ...
-//  We keep the PHP+JSR (so $E7B2 parses the filename to $027F and
-//  the JOIN/VERIFY flags to $025A/$025B) and overwrite from $E85F
-//  with the full post-load sequence — mirrors what the original
-//  ROM does at $E8E9-$E900 after a successful tape load:
+//  Patch range: $E85F-$E8BB (93 bytes), the body of the Atmos CLOAD
+//  handler at $E85B. Layout:
 //
-//      $E85F  LDA #$01           ; deterministic 1 for the mailbox
-//      $E861  STA $C000          ; trigger — halts CPU; loader runs;
-//                                  populates $02xx and $9A/$9B from
-//                                  the segment header; resumes CPU.
-//      $E864  PLP                ; balance the PHP at $E85B
-//      $E865  LDX $02AB          ; copy end-of-basic into $9C/$9D
-//      $E868  LDA $02AC          ;   (mirror $E8E9-$E8F1)
-//      $E86B  STX $9C
-//      $E86D  STA $9D
-//      $E86F  JSR $C55F          ; set up BASIC line link pointers
-//                                  (mirror $E8F3 — without this,
-//                                  LIST and RUN see broken state).
-//      $E872  LDA $02AD          ; autorun flag
-//      $E875  BEQ done           ; not auto-run → RTS
-//      $E877  LDA $02AE          ; file type
-//      $E87A  BEQ basic_ar       ; type=$00 (BASIC) → JMP $C708
-//      $E87C  JMP ($02A9)        ; type=$80 (MC) → indirect to start
-//      $E87F  JMP $C708          ; basic_ar: enter BASIC RUN
-//      $E882  RTS                ; done: back to READY>
+//      $E85F-$E8B6  : NOP × 88 (sled — funnels any mid-CLOAD JMPs)
+//      $E8B7        : LDA #$01           ; A9 01
+//      $E8B9        : STA $C000          ; 8D 00 C0
+//                                         ; trigger fires; loader runs;
+//                                         ; populates $02A9-$02AE etc.;
+//                                         ; CPU resumes at $E8BC.
+//      $E8BC+       : (unpatched original ROM)
+//                     ↳ PLP                (balances $E85B PHP)
+//                     ↳ verify-error path (skipped if not verifying)
+//                     ↳ $E8D3 JSR $E651    print filename
+//                     ↳ $E8D6 LDA $02AE; BEQ → BASIC autorun path
+//                     ↳ $E8E5 JMP ($02A9)  MC autorun (jump to start)
+//                     ↳ $E8E9-$E8F1       BASIC: $9C/$9D ← $02AB/$02AC
+//                     ↳ $E8F3 JSR $C55F    line link setup
+//                     ↳ $E8F6-$E900       BASIC autorun → JMP $C708
 //
-//  $C000 is the unified host mailbox — value 1 lights LED_USER and
-//  triggers the multi-stage tap segment loader; value 0 only clears
-//  LED_USER.
+//  We keep:
+//    $E85B  PHP                    (original — saves flags)
+//    $E85C  JSR $E7B2              (original — parses CLOAD args,
+//                                    populates $027F filename and
+//                                    $025A/$025B JOIN/VERIFY flags)
 //
-//  Source for the addresses: docs/Oric Rom.html:5135.
+//  Why NOP-sled instead of a self-contained patch:
+//    Multi-stage MC tapes (e.g. gravitor.tap) have a stage-0 loader
+//    stub that re-enters CLOAD body partway through, typically with
+//    `JMP $E867`, expecting the original ROM tape-load path to pull
+//    the next segment. With a 36-byte self-contained patch (the
+//    earlier design at $E85F-$E882), `JMP $E867` would land on a
+//    data byte interpreted as opcode `$02` (KIL) and jam the CPU.
+//
+//    The NOP-sled fixes this: any JMP into $E85F-$E8B6 NOP-sleds to
+//    the trigger at $E8B7, fires another Smart CLOAD load, then
+//    falls through to the original ROM at $E8BC for native autorun
+//    dispatch. Multi-stage tapes load every segment via Smart CLOAD
+//    instead of falling back to slow audio-pin decode.
+//
+//  Sources for the relevant ROM addresses: docs/Oric Rom.md.
+//    CLOAD entry $E85B; argument parser $E7B2; post-load + autorun
+//    block $E8BC-$E900; MC autorun JMP ($02A9) at $E8E5; BASIC
+//    autorun JMP $C708 at $E900.
 //============================================================================
 
 module cload_patch_rom (
@@ -48,68 +56,27 @@ module cload_patch_rom (
 	output  [7:0] patch_data
 );
 
-// Range check on the 14-bit ROM offset (CPU $E85F = bios offset $285F,
-// since $E85F & $3FFF = $285F). Add more ranges with `||` when payload
-// grows.
-wire in_cload_trampoline = (rom_addr >= 14'h285F) && (rom_addr <= 14'h2882);
+// 14-bit ROM offset: CPU $E85F → bios offset $285F (= $E85F & $3FFF).
+wire in_cload_trampoline = (rom_addr >= 14'h285F) && (rom_addr <= 14'h28BB);
 
 assign patch_active = enable && in_cload_trampoline;
 
 reg [7:0] data_r;
 always @(*) begin
 	case (rom_addr)
-		// $E85F  LDA #$01
-		14'h285F: data_r = 8'hA9;
-		14'h2860: data_r = 8'h01;
-		// $E861  STA $C000          (trigger; halts + resumes CPU)
-		14'h2861: data_r = 8'h8D;
-		14'h2862: data_r = 8'h00;
-		14'h2863: data_r = 8'hC0;
-		// $E864  PLP                (balance PHP at $E85B)
-		14'h2864: data_r = 8'h28;
-		// $E865  LDX $02AB
-		14'h2865: data_r = 8'hAE;
-		14'h2866: data_r = 8'hAB;
-		14'h2867: data_r = 8'h02;
-		// $E868  LDA $02AC
-		14'h2868: data_r = 8'hAD;
-		14'h2869: data_r = 8'hAC;
-		14'h286A: data_r = 8'h02;
-		// $E86B  STX $9C
-		14'h286B: data_r = 8'h86;
-		14'h286C: data_r = 8'h9C;
-		// $E86D  STA $9D
-		14'h286D: data_r = 8'h85;
-		14'h286E: data_r = 8'h9D;
-		// $E86F  JSR $C55F          (set up BASIC line links)
-		14'h286F: data_r = 8'h20;
-		14'h2870: data_r = 8'h5F;
-		14'h2871: data_r = 8'hC5;
-		// $E872  LDA $02AD          (autorun flag)
-		14'h2872: data_r = 8'hAD;
-		14'h2873: data_r = 8'hAD;
-		14'h2874: data_r = 8'h02;
-		// $E875  BEQ done (+$0B → $E882)
-		14'h2875: data_r = 8'hF0;
-		14'h2876: data_r = 8'h0B;
-		// $E877  LDA $02AE          (file type)
-		14'h2877: data_r = 8'hAD;
-		14'h2878: data_r = 8'hAE;
-		14'h2879: data_r = 8'h02;
-		// $E87A  BEQ basic_ar (+$03 → $E87F)
-		14'h287A: data_r = 8'hF0;
-		14'h287B: data_r = 8'h03;
-		// $E87C  JMP ($02A9)        (MC autorun → indirect start)
-		14'h287C: data_r = 8'h6C;
-		14'h287D: data_r = 8'hA9;
-		14'h287E: data_r = 8'h02;
-		// $E87F  JMP $C708          (basic_ar — BASIC RUN)
-		14'h287F: data_r = 8'h4C;
-		14'h2880: data_r = 8'h08;
-		14'h2881: data_r = 8'hC7;
-		// $E882  RTS                (done)
-		14'h2882: data_r = 8'h60;
-		default:  data_r = 8'hEA; // NOP — never reached while patch_active=0
+		// $E8B7  LDA #$01
+		14'h28B7: data_r = 8'hA9;
+		14'h28B8: data_r = 8'h01;
+		// $E8B9  STA $C000          (trigger — halts CPU; loader runs;
+		//                            populates $02A9-$02AE / $9A/$9B;
+		//                            CPU resumes at $E8BC = original ROM PLP)
+		14'h28B9: data_r = 8'h8D;
+		14'h28BA: data_r = 8'h00;
+		14'h28BB: data_r = 8'hC0;
+		// $E85F-$E8B6: 88-byte NOP sled. Default below covers it.
+		// (Default is also harmless outside the patch range because
+		//  patch_active is gated on in_cload_trampoline.)
+		default:  data_r = 8'hEA; // NOP
 	endcase
 end
 assign patch_data = data_r;
