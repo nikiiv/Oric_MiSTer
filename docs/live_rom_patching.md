@@ -121,16 +121,27 @@ labelled address.
 Live patching becomes useful when paired with a snoop trigger
 (`docs/oric_to_core_comm.md` Pattern A). The Smart CLOAD example:
 
-1. Patch CLOAD entry to fall through to `STA $02FE / PLP / RTS`.
-2. `oricatmos.vhd` decodes the `STA $02FE` into a `cload_we` strobe.
-3. `cload_handler.v` halts the CPU, reads the filename from
-   `$027F` (which the ROM's parser already populated), paints
-   `$BB80`, releases the CPU.
+1. Patch CLOAD body with a NOP sled at `$E85F-$E8B6` ending in
+   `LDA #$01 / STA $C000` at `$E8B7`.
+2. `oricatmos.vhd` decodes the `STA $C000` into a `c000_we` strobe.
+3. `tap_segment_loader.v` halts the CPU, scans the F1-buffered
+   `tapecache` for the next sync+marker, parses the 9-byte header,
+   streams the body into RAM, and writes the BASIC-state side
+   effects at `$02A9-$02AE` (start/end/autorun/type) so the
+   unpatched ROM's autorun dispatch at `$E8BC-$E900` finishes the
+   job natively.
 
 So the patch is the *trampoline* into a host handler. The actual
 work happens in Verilog, not 6502. This pattern is far cheaper than
 writing 200-byte 6502 routines, and the patched code is just a
 2-3 instruction handoff.
+
+Avoid using a `$02xx` system-RAM address as the mailbox — game
+code may write there for its own purposes and spuriously trigger
+your handler. ROM-space addresses (`$C000+`) are safer because
+well-behaved game code never writes to them. (We learned this the
+hard way: an early POC used `$02FE` and Xenon3 corrupted its own
+screen by tripping the handler.)
 
 If a future feature does need real 6502 logic (e.g. a custom file
 format that maps differently into RAM), the patch ROM can hold an

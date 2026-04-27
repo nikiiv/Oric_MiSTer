@@ -127,10 +127,6 @@ ENTITY oricatmos IS
 		ay_snap_creg_we : IN STD_LOGIC := '0';
 		ay_snap_creg    : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0');
 
-		-- Smart CLOAD POC: pulses high for one phi2 when CPU writes
-		-- to $02FE. Used by rtl/cload_handler.v.
-		cload_we        : OUT STD_LOGIC;
-
 		-- Smart CLOAD live ROM patch: when patch_active='1', the CPU
 		-- reads patch_data instead of the selected ROM source.
 		patch_active    : IN  STD_LOGIC := '0';
@@ -560,16 +556,6 @@ BEGIN
 	K7_REMOTE <= via_pb_out(6);
 	PRN_STROBE <= via_pb_out(4);
 	PRN_DATA <= via_pa_out;
-
-	-- Smart CLOAD mailbox: snoop CPU writes to $02FE.
-	-- A RAM address is used (not $03xx) so we avoid the VIA's
-	-- $0300-$03FF mirroring — a write to a $03xx mailbox would
-	-- also land on a VIA register and toggle ORB/printer/relay.
-	-- The byte deposited at $02FE is harmless dead RAM.
-	cload_we <= '1' WHEN ula_phi2 = '1'
-	                 AND cpu_rw = '0'
-	                 AND cpu_ad(15 DOWNTO 0) = X"02FE"
-	            ELSE '0';
 
 	-- Host LED mailbox: snoop CPU writes to $C000. $C000 is in the
 	-- ROM read-window (read returns the ROM byte $4C, untouched);
