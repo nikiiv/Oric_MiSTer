@@ -65,7 +65,7 @@ reg  [15:0] data_start;
 reg  [15:0] data_end;
 reg  [15:0] write_addr;
 reg  [7:0]  prog_type;       // header +2
-reg  [7:0]  autorun_byte;    // header +1
+reg  [7:0]  autorun_byte;    // header +3 (the byte that lands in $02AD per ROM $E4BE loop)
 reg  [7:0]  name_buf [0:11];
 reg  [3:0]  name_pos;
 reg  [3:0]  fx_step;
@@ -139,7 +139,7 @@ always @(posedge clk_sys) begin
 					end
 				end
 				else begin
-					if (cache_addr - 16'd1 == bot_seg + 16'd1) autorun_byte         <= tape_data;
+					if (cache_addr - 16'd1 == bot_seg + 16'd3) autorun_byte         <= tape_data;
 					if (cache_addr - 16'd1 == bot_seg + 16'd2) prog_type            <= tape_data;
 					if (cache_addr - 16'd1 == bot_seg + 16'd4) data_end[15:8]       <= tape_data;
 					if (cache_addr - 16'd1 == bot_seg + 16'd5) data_end[7:0]        <= tape_data;
