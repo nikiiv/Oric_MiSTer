@@ -182,7 +182,7 @@ assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0; 
  
-assign LED_USER    = ioctl_download | fdd_busy | tape_adc_act;
+assign LED_USER    = ioctl_download | fdd_busy | tape_adc_act | led_user_pokeable;
 assign LED_DISK    = led_disk;
 assign LED_POWER   = 0;
 assign BUTTONS     = 0; 
@@ -534,7 +534,9 @@ oricatmos oricatmos
 	.ay_snap_creg     (ay_snap_creg),
 	.cload_we         (cload_we),
 	.patch_active     (cload_patch_active),
-	.patch_data       (cload_patch_data)
+	.patch_data       (cload_patch_data),
+	.c000_we          (c000_we),
+	.c000_data        (c000_data)
 );
 
 
@@ -691,6 +693,22 @@ wire [15:0] cload_ram_addr;
 wire  [7:0] cload_ram_data;
 wire        cload_ram_we;
 wire        cload_we;
+
+// Host LED mailbox: oricatmos.vhd snoops CPU writes to $C000 and
+// emits c000_we (1-cycle strobe) + c000_data (the byte being
+// written). led_user_pokeable latches the bit: data==1 sets,
+// data==0 clears, anything else holds. Driven into the MiSTer USER
+// LED below (OR'd with the existing activity sources).
+wire        c000_we;
+wire  [7:0] c000_data;
+reg         led_user_pokeable = 1'b0;
+always @(posedge clk_sys) begin
+	if (reset) led_user_pokeable <= 1'b0;
+	else if (c000_we) begin
+		if (c000_data == 8'd1) led_user_pokeable <= 1'b1;
+		else if (c000_data == 8'd0) led_user_pokeable <= 1'b0;
+	end
+end
 cload_handler cload_handler (
 	.clk_sys (clk_sys),
 	.reset   (reset),
