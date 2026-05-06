@@ -30,10 +30,6 @@
 //  not a text screen. Stock CLOAD already disturbs that region; we
 //  don't add to it.
 //
-//  Forked from rtl/dma_tap_loader.v — same cache scan / RAM stream
-//  shape, with the per-segment trigger model and a new T_FX state in
-//  place of the DMA loader's unconditional VARTAB/ARYTAB/STREND patch.
-//
 //  All BASIC-state writes are derived from the disassembly recon at
 //  docs/Oric Rom.md (CLOAD entry $E85B, header parser $E4AC).
 //============================================================================
