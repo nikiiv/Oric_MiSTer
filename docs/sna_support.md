@@ -274,11 +274,11 @@ the 256 KiB cap; no compression needed.
 - **Menu / trigger:** `F4,SNA,Load Snapshot;` in `Oric.sv`, ioctl_index
   `4`. File is buffered in a new 128 KiB `snapcache` spram, then a state
   machine walks the typed-block container after `ioctl_download` falls.
-- **CPU halt:** `snap_active` is OR'd into the existing
-  `cpu_halt | dma_active` chain feeding `oricatmos.cpu_halt`.
+- **CPU halt:** `snap_active` is OR'd into the `cpu_halt` chain feeding
+  `oricatmos.cpu_halt` alongside `tap_active`.
 - **RAM restore:** during `S_BLK_DATA_RAM`, the snap state machine
-  drives `snap_ram_addr/data/we` through a new branch in the main spram
-  address-mux — mirrors the DMA loader's pattern.
+  drives `snap_ram_addr/data/we` through a branch in the main spram
+  address-mux — same Pattern B shape as `tap_segment_loader`.
 - **CPU register restore:** new `Regs_set[63:0]` + `Regs_set_we` ports
   on T65 with snap branches in three register-clock processes (PC/S +
   inflight state, P/X/Y/A, MCycle/RstCycle).

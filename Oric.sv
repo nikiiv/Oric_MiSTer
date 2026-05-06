@@ -213,7 +213,6 @@ video_freak video_freak
 localparam CONF_STR = {
 	"Oric;;",
 	"F1,TAP,Load TAP file;",
-	"F3,TAP,Load TAP via DMA;",
 	"F4,SNA,Load Snapshot;",
 	"h0T[53],Rewind Tape;",
 	"-;",
@@ -416,11 +415,6 @@ always @(posedge clk_sys) begin
 		spram_addr <= clr_addr[15:0];
 		spram_we <= 1'b1;
 	end
-	else if (dma_active) begin
-		spram_d <= dma_data;
-		spram_addr <= dma_addr;
-		spram_we <= dma_we;
-	end
 	else if (snap_active) begin
 		spram_d <= snap_ram_data;
 		spram_addr <= snap_ram_addr;
@@ -512,7 +506,7 @@ oricatmos oricatmos
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
 	.sd_din_strobe    (0),
-	.cpu_halt         (dma_active | snap_active | tap_active),
+	.cpu_halt         (snap_active | tap_active),
 	.cpu_regs_set     (cpu_regs_set),
 	.cpu_regs_set_we  (cpu_regs_set_we),
 	.via_snap_we      (via_snap_we),
@@ -631,10 +625,8 @@ assign AUDIO_R = (stereo == 2'b00) ? {1'b0,psg_out+tapeAudio,1'b0} : (stereo == 
 wire casdout;
 wire cas_relay;
 
-wire        load_tape     = ioctl_index==1;
-wire        load_tape_dma = ioctl_index==3;
-wire        load_sna      = ioctl_index==4;
-wire        any_tape_load = load_tape | load_tape_dma;
+wire        load_tape = ioctl_index==1;
+wire        load_sna  = ioctl_index==4;
 reg  [15:0] tape_end;
 reg         tape_loaded = 1'b0;
 reg         ioctl_downlD;
@@ -642,28 +634,20 @@ reg         ioctl_downlD;
 wire [15:0] tape_addr;
 wire [7:0]  tape_data;
 
-// DMA TAP loader signals (driven by rtl/dma_tap_loader.v)
-wire [15:0] dma_cache_addr;
-wire        dma_active;
-wire [15:0] dma_addr;
-wire  [7:0] dma_data;
-wire        dma_we;
-
 spram #(.address_width(16)) tapecache (
   .clock(clk_sys),
 
-  .address((ioctl_download && any_tape_load) ? ioctl_addr :
-           dma_active                        ? dma_cache_addr :
-           tap_active                        ? tap_cache_addr :
-                                               tape_addr),
+  .address((ioctl_download && load_tape) ? ioctl_addr :
+           tap_active                    ? tap_cache_addr :
+                                           tape_addr),
   .data(ioctl_dout),
-  .wren(ioctl_wr && any_tape_load),
+  .wren(ioctl_wr && load_tape),
   .q(tape_data)
 );
 
 
 always @(posedge clk_sys) begin
- if (any_tape_load) tape_end <= ioctl_addr[15:0];
+ if (load_tape) tape_end <= ioctl_addr[15:0];
 end
 
 always @(posedge clk_sys) begin
@@ -675,7 +659,7 @@ end
 cassette cassette (
   .clk(clk_sys),
   .reset(reset),
-  .rewind(tapeRewind | (any_tape_load && ioctl_download)),
+  .rewind(tapeRewind | (load_tape && ioctl_download)),
   .en(cas_relay && tape_loaded && ~tapeUseADC),
   .tape_addr(tape_addr),
   .tape_data(tape_data),
@@ -688,9 +672,10 @@ cassette cassette (
 // Triggered by the patched BASIC CLOAD doing `LDA #$01 / STA $C000`.
 // Pulls one segment per trigger from tapecache into RAM, populates
 // the BASIC-state side effects (start/end pointers, autorun, type,
-// TXTTAB/TXTEND), paints "CLOAD: <name>" at $BB80, releases CPU.
-// Lets multi-segment .tap files load in stages so inter-segment
-// BASIC code (graphics init, etc.) gets to run between calls.
+// TXTTAB/TXTEND), then releases CPU. Status-row paint at $BB80 is
+// left to the ROM ($E651) so HIRES programs that use that area as
+// their own data aren't disturbed. Lets multi-segment .tap files
+// load in stages so inter-segment BASIC code runs between calls.
 wire        tap_active;
 wire [15:0] tap_ram_addr;
 wire  [7:0] tap_ram_data;
@@ -727,20 +712,6 @@ always @(posedge clk_sys) begin
 		else if (c000_data == 8'd0) led_user_pokeable <= 1'b0;
 	end
 end
-
-// ---- DMA TAP loader (rtl/dma_tap_loader.v) ----
-dma_tap_loader dma_loader (
-	.clk_sys   (clk_sys),
-	.reset     (reset),
-	.trigger   (ioctl_downlD && ~ioctl_download && load_tape_dma),
-	.tape_end  (tape_end),
-	.tape_data (tape_data),
-	.cache_addr(dma_cache_addr),
-	.active    (dma_active),
-	.ram_addr  (dma_addr),
-	.ram_data  (dma_data),
-	.ram_we    (dma_we)
-);
 
 // ---- Snapshot LOAD .sna (rtl/snap_loader.v) ----
 // Block format and field-level mapping in docs/sna_support.md.

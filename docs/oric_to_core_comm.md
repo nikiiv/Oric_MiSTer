@@ -82,23 +82,21 @@ The `$C000` mailbox is dual-use:
 ## Pattern B — core → 6502: halt + paint via spram bus
 
 To write into main RAM (or read it back), the core grabs the spram
-address bus while the CPU is parked. The mux at `Oric.sv:411-432`
-prioritises three loaders, then the CPU:
+address bus while the CPU is parked. The mux in `Oric.sv` prioritises
+the active loaders, then the CPU:
 
 ```
-if (dma_active)       spram <= dma_*;
-else if (snap_active) spram <= snap_*;
-else if (tap_active)  spram <= tap_*;
-else                  spram <= cpu_*;
+if (snap_active)     spram <= snap_*;
+else if (tap_active) spram <= tap_*;
+else                 spram <= cpu_*;
 ```
 
-`*_active` outputs from the loader OR into `oricatmos.cpu_halt`
-(`Oric.sv:508`) so the CPU stops issuing cycles for the duration.
-Add a new arm by:
+`*_active` outputs from the loader OR into `oricatmos.cpu_halt` so
+the CPU stops issuing cycles for the duration. Add a new arm by:
 
 1. Building a module that exposes `active`, `ram_addr`, `ram_data`,
    `ram_we` (and optionally consumes `ram_q` for reads).
-2. Adding a 4th `else if` to the mux.
+2. Adding another `else if` to the mux.
 3. OR'ing `*_active` into the cpu_halt expression.
 
 ### Reading main RAM (3-cycle pipeline)
@@ -125,7 +123,6 @@ to land on the right cycle. Writing is one cycle simpler — drive
 
 | Module                   | What it does                                          |
 | ------------------------ | ----------------------------------------------------- |
-| `dma_tap_loader.v`       | Streams a `.tap` image into RAM, paints `$BB80`.       |
 | `snap_loader.v`          | Restores `.sna` snapshot — RAM, AY, VIA register file. |
 | `tap_segment_loader.v`   | Smart CLOAD per-segment loader; populates `$02A9-$02AE` so the ROM's autorun path takes over. |
 
@@ -185,7 +182,7 @@ The same shape extends to multi-bit registers (e.g. an 8-bit
 | `Oric.sv`                  | Top-level wiring; spram mux; cpu_halt OR-chain; status bits; pin assigns. |
 | `rtl/tap_segment_loader.v` | Pattern B example (halt + cache scan + RAM stream + side-effect writes). |
 | `rtl/cload_patch_rom.v`    | Pattern C reference (ROM-read override).                            |
-| `rtl/dma_tap_loader.v`, `rtl/snap_loader.v` | Older Pattern B users; same halt/paint shape.   |
+| `rtl/snap_loader.v`        | Pattern B sibling — halt/restore shape used for `.sna` snapshots.    |
 
 ## Open extensions
 
