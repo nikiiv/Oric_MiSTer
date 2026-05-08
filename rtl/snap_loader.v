@@ -62,7 +62,10 @@ module snap_loader (
 	output reg  [3:0] ay_snap_addr,
 	output reg  [7:0] ay_snap_data,
 	output reg        ay_snap_creg_we,
-	output reg  [3:0] ay_snap_creg
+	output reg  [3:0] ay_snap_creg,
+
+	output reg        ula_snap_mode_we,
+	output reg  [2:0] ula_snap_mode
 );
 
 reg  [17:0] snap_cache_addr;
@@ -86,24 +89,25 @@ end
 
 wire snap_trigger = ioctl_downlD && ~ioctl_download && load_sna;
 
-localparam S_IDLE             = 4'd0,
-           S_INIT             = 4'd1,
-           S_HDR_TAG          = 4'd2,
-           S_HDR_SIZE         = 4'd3,
-           S_BLK_DATA_RAM     = 4'd4,
-           S_BLK_CPU          = 4'd5,
-           S_BLK_AY           = 4'd6,
-           S_BLK_VIA          = 4'd7,
-           S_SKIP             = 4'd8,
-           S_APPLY_VIA        = 4'd9,
-           S_APPLY_VIA_TIMERS = 4'd10,
-           S_APPLY_AY         = 4'd11,
-           S_APPLY_CPU        = 4'd12,
-           S_DRAIN            = 4'd13,
-           S_DONE             = 4'd14,
-           S_DEBUG_PAINT      = 4'd15;
+localparam S_IDLE             = 5'd0,
+           S_INIT             = 5'd1,
+           S_HDR_TAG          = 5'd2,
+           S_HDR_SIZE         = 5'd3,
+           S_BLK_DATA_RAM     = 5'd4,
+           S_BLK_CPU          = 5'd5,
+           S_BLK_AY           = 5'd6,
+           S_BLK_VIA          = 5'd7,
+           S_SKIP             = 5'd8,
+           S_APPLY_VIA        = 5'd9,
+           S_APPLY_VIA_TIMERS = 5'd10,
+           S_APPLY_AY         = 5'd11,
+           S_APPLY_CPU        = 5'd12,
+           S_DRAIN            = 5'd13,
+           S_DONE             = 5'd14,
+           S_DEBUG_PAINT      = 5'd15,
+           S_BLK_OSN          = 5'd16;
 
-reg  [3:0]  snap_state;
+reg  [4:0]  snap_state;
 reg  [1:0]  hdr_byte_cnt;
 reg  [31:0] blk_tag;
 reg  [31:0] blk_size;
@@ -112,6 +116,7 @@ reg  [16:0] blk_offset;
 
 reg  [15:0] snap_pc;
 reg  [7:0]  snap_a, snap_x, snap_y, snap_s, snap_p;
+reg         snap_ula_mode_valid;
 
 // AY register file (15 regs) + currently-selected register
 reg  [7:0]  snap_ay_regs [0:14];
@@ -160,6 +165,7 @@ always @(posedge clk_sys) begin
 		via_snap_ifr_we      <= 1'b0;
 		ay_snap_we           <= 1'b0;
 		ay_snap_creg_we      <= 1'b0;
+		ula_snap_mode_we     <= 1'b0;
 	end
 	else begin
 		ram_we               <= 1'b0;
@@ -171,6 +177,7 @@ always @(posedge clk_sys) begin
 		via_snap_ifr_we      <= 1'b0;
 		ay_snap_we           <= 1'b0;
 		ay_snap_creg_we      <= 1'b0;
+		ula_snap_mode_we     <= 1'b0;
 
 		case (snap_state)
 			S_IDLE: begin
@@ -187,6 +194,8 @@ always @(posedge clk_sys) begin
 					snap_y  <= 8'h00;
 					snap_s  <= 8'hFF;
 					snap_p  <= 8'h24; // I=1, undefined-bit-5=1, others 0
+					ula_snap_mode       <= 3'b000;
+					snap_ula_mode_valid <= 1'b0;
 					snap_state <= S_INIT;
 				end
 			end
@@ -238,6 +247,7 @@ always @(posedge clk_sys) begin
 					hdr_byte_cnt <= 2'd0;
 					blk_offset   <= 17'd0;
 					case (blk_tag)
+						TAG_OSN:  snap_state <= S_BLK_OSN;
 						TAG_CPU:  snap_state <= S_BLK_CPU;
 						TAG_AY:   snap_state <= S_BLK_AY;
 						TAG_VIA:  snap_state <= S_BLK_VIA;
@@ -247,6 +257,24 @@ always @(posedge clk_sys) begin
 					if (blk_tag != TAG_DATA) prev_tag <= blk_tag;
 				end
 				else hdr_byte_cnt <= hdr_byte_cnt + 2'd1;
+			end
+
+			// OSN machine-config block: capture the ULA video mode at
+			// offset 16. Oricutron stores hires/text and 50/60 Hz here;
+			// RAM contents alone are not enough when a snapshot resumes
+			// mid-screen before the next mode attribute is scanned.
+			S_BLK_OSN: begin
+				if (blk_offset[7:0] == 8'd16) begin
+					ula_snap_mode       <= snap_cache_q[2:0];
+					snap_ula_mode_valid <= 1'b1;
+				end
+				snap_cache_addr <= snap_cache_addr + 18'd1;
+				blk_offset      <= blk_offset + 17'd1;
+				if (blk_offset == blk_size[16:0] - 17'd1) begin
+					blk_offset   <= 17'd0;
+					hdr_byte_cnt <= 2'd0;
+					snap_state   <= S_HDR_TAG;
+				end
 			end
 
 			// DATA payload following OSN: stream first 64 KiB into main RAM.
@@ -517,9 +545,10 @@ always @(posedge clk_sys) begin
 			// cycle (24 clk_sys cycles per phi2 half) so cpu_di settles to
 			// mem[loaded_PC] before we let T65 fetch its first opcode.
 			S_DRAIN: begin
-				ram_addr       <= snap_pc;
-				ram_we         <= 1'b0;
-				snap_drain_cnt <= snap_drain_cnt + 10'd1;
+				ram_addr         <= snap_pc;
+				ram_we           <= 1'b0;
+				ula_snap_mode_we <= snap_ula_mode_valid;
+				snap_drain_cnt   <= snap_drain_cnt + 10'd1;
 				if (snap_drain_cnt == 10'd1023) snap_state <= S_DONE;
 			end
 

@@ -133,7 +133,7 @@ For each block, fields are marked with their LOAD status:
 | 13  | 1    | vsync hack flag      | **[skip]**                                      |
 | 14  | 1    | drive type           | **[skip]** v1: no disk                          |
 | 15  | 1    | tape turbo flag      | **[skip]**                                      |
-| 16  | 1    | video mode           | **[skip]** ULA mode is in RAM attributes anyway |
+| 16  | 1    | video mode           | **[done]** restores ULA mode bits before CPU release |
 | 17  | 4    | keymap               | **[skip]**                                      |
 
 The OSN block is recognised so that the following `DATA` block is
@@ -296,6 +296,10 @@ the 192 KiB cap; no compression needed.
   its own source-IRQ register. After the v2 register apply finishes,
   `snap_loader.v` enters `S_APPLY_VIA_TIMERS` and pulses the four
   strobes one cycle each before moving on to AY apply.
+- **ULA mode restore:** `OSN+16` is captured and driven into the ULA
+  during the pre-release drain window so snapshots that resume before
+  the next mode attribute still select the correct text/hires and
+  50/60 Hz state.
 - **Debug visibility:** optional `SNAP_DEBUG` Verilog macro paints the
   captured CPU regs at row 10 of the text screen so you can verify the
   decoder visually. Turn it on with `tools/oric-build --snap-debug`;
@@ -320,8 +324,6 @@ the 192 KiB cap; no compression needed.
   current frame it is so VIA CB1 fires at exactly the right line. Our
   ULA generates VSYNC from its own line counter and the visible glitch
   on resume is one frame at most, so we don't restore it.
-- **OSN +16 vid_mode** — ULA mode bits are derived from RAM
-  attributes per scanline, so this is regenerated automatically.
 - **CPU +12 nmi / +18 irq flags** — the T65 re-derives these from the
   VIA O_IRQ_L line on the next cycle after resume; there's no benefit
   to forcing them.

@@ -126,6 +126,8 @@ ENTITY oricatmos IS
 		ay_snap_data    : IN STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
 		ay_snap_creg_we : IN STD_LOGIC := '0';
 		ay_snap_creg    : IN STD_LOGIC_VECTOR(3 DOWNTO 0) := (OTHERS => '0');
+		ula_snap_mode_we : IN STD_LOGIC := '0';
+		ula_snap_mode   : IN STD_LOGIC_VECTOR(2 DOWNTO 0) := (OTHERS => '0');
 
 		-- Smart CLOAD live ROM patch: when patch_active='1', the CPU
 		-- reads patch_data instead of the selected ROM source.
@@ -366,6 +368,8 @@ BEGIN
 			CSIOn => ula_CSIOn,
 			CSROMn => ula_CSROMn,
 			CSRAMn => ula_CSRAMn,
+			SNAP_MODE_WE => ula_snap_mode_we,
+			SNAP_MODE => ula_snap_mode,
 			R => VIDEO_R,
 			G => VIDEO_G,
 			B => VIDEO_B,

@@ -99,6 +99,9 @@ port (
 	SRAM_WE    :   out std_logic;
 	LATCH_SRAM :   out std_logic;
 
+	SNAP_MODE_WE : in  std_logic := '0';
+	SNAP_MODE    : in  std_logic_vector(2 downto 0) := (others => '0');
+
 	-- DRAM
 --	AD_RAM     :   out std_logic_vector( 7 downto 0); -- ADDRESS BUS for dynamic ram  -- pin 38,36,37,4,3,2,40,39
 --	RASn       :   out std_logic;                     -- RAS for dynamic ram          -- pin 10
@@ -450,7 +453,9 @@ begin
 		  lREG_STYLE <= (others=>'0');
 		  lREG_PAPER <= (others=>'0');
 	  elsif rising_edge(CLK_24) then
-			if (RELD_REG = '1' and isAttrib = '1' and BLANKINGn = '1') then
+			if (SNAP_MODE_WE = '1') then
+				lREG_MODE <= SNAP_MODE;
+			elsif (RELD_REG = '1' and isAttrib = '1' and BLANKINGn = '1') then
 				case lREGHOLD(6 downto 3) is
 					when "0000" => lREG_INK   <= lREGHOLD(2 downto 0);
 					when "0001" => lREG_STYLE <= lREGHOLD(2 downto 0);

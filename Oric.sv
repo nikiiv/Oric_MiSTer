@@ -526,6 +526,8 @@ oricatmos oricatmos
 	.ay_snap_data     (ay_snap_data),
 	.ay_snap_creg_we  (ay_snap_creg_we),
 	.ay_snap_creg     (ay_snap_creg),
+	.ula_snap_mode_we (ula_snap_mode_we),
+	.ula_snap_mode    (ula_snap_mode),
 	.patch_active     (cload_patch_active),
 	.patch_data       (cload_patch_data),
 	.c000_we          (c000_we),
@@ -740,6 +742,8 @@ wire  [3:0] ay_snap_addr;
 wire  [7:0] ay_snap_data;
 wire        ay_snap_creg_we;
 wire  [3:0] ay_snap_creg;
+wire        ula_snap_mode_we;
+wire  [2:0] ula_snap_mode;
 
 snap_loader snap_loader (
 	.clk_sys         (clk_sys),
@@ -772,7 +776,9 @@ snap_loader snap_loader (
 	.ay_snap_addr    (ay_snap_addr),
 	.ay_snap_data    (ay_snap_data),
 	.ay_snap_creg_we (ay_snap_creg_we),
-	.ay_snap_creg    (ay_snap_creg)
+	.ay_snap_creg    (ay_snap_creg),
+	.ula_snap_mode_we (ula_snap_mode_we),
+	.ula_snap_mode   (ula_snap_mode)
 );
 
 ///////////////////////////////////////////////////
