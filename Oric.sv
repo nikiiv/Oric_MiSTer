@@ -236,6 +236,7 @@ localparam CONF_STR = {
 	"P1O[51:50],Tape Audio,Mute,Low,High;",
 	"P1O[52],Tape Input,File,ADC;",
 	"P1O[56],Smart CLOAD,On,Off;",
+	"P1O[57],Autoload TAP,On,Off;",
 	"P1-;",
 	"P1O[55:54],Joystick Adapter,None,PASE,IJK;",
 	"P1-;",
@@ -258,6 +259,7 @@ wire       tapeUseADC = status[52];
 wire       tapeRewind = status[53];
 wire [1:0] joystick_adapter = status[55:54];
 wire       smart_cload_en   = ~status[56];  // menu shows On (default) / Off
+wire       tap_autorun_en   = ~status[57];  // menu shows On (default) / Off
 
 ///////////////////////////////////////////////////
 
@@ -275,12 +277,14 @@ pll pll
 
 reg        reset = 0;
 reg [16:0] clr_addr = 0;
+wire       tap_autorun_reset_req;
+wire       manual_reset_req = RESET | status[0] | buttons[1];
 always @(posedge clk_sys) begin
 
 	if(~&clr_addr) clr_addr <= clr_addr + 1'd1;
 	else reset <= 0;
 
-	if(RESET | status[0] | buttons[1]) begin
+	if(manual_reset_req | tap_autorun_reset_req) begin
 		clr_addr <= 0;
 		reset <= 1;
 	end
@@ -324,6 +328,9 @@ wire  [24:0] ioctl_addr;
 wire   [7:0] ioctl_dout;
 wire         ioctl_download;
 wire   [7:0] ioctl_index;
+wire         load_tape = ioctl_index==1;
+wire         load_sna  = ioctl_index==4;
+reg          ioctl_downlD;
 
 wire         status_set;
 wire  [31:0] status_out;
@@ -384,9 +391,32 @@ begin
 end
 ///////////////////////////////////////////////////
 
-wire key_strobe = old_keystb ^ ps2_key[10];
+wire        tap_load_pulse = ioctl_downlD && ~ioctl_download && load_tape;
+wire        tap_autorun_active;
+wire [10:0] tap_autorun_ps2_key;
+wire [10:0] kbd_ps2_key = tap_autorun_active ? tap_autorun_ps2_key : ps2_key;
+wire        hps_key_strobe;
+wire        tap_autorun_key_strobe;
+
+tap_autorun_keys tap_autorun_keys (
+	.clk_sys    (clk_sys),
+	.hard_reset (manual_reset_req),
+	.start      (tap_load_pulse && tap_autorun_en),
+	.oric_reset (reset),
+	.reset_req  (tap_autorun_reset_req),
+	.active     (tap_autorun_active),
+	.ps2_key    (tap_autorun_ps2_key)
+);
+
+wire key_strobe = tap_autorun_active ? tap_autorun_key_strobe : hps_key_strobe;
 reg old_keystb = 0;
-always @(posedge clk_sys) old_keystb <= ps2_key[10];
+reg old_tap_autorun_keystb = 0;
+always @(posedge clk_sys) begin
+	old_keystb <= ps2_key[10];
+	old_tap_autorun_keystb <= tap_autorun_ps2_key[10];
+end
+assign hps_key_strobe = old_keystb ^ ps2_key[10];
+assign tap_autorun_key_strobe = old_tap_autorun_keystb ^ tap_autorun_ps2_key[10];
 
 
 wire  [11:0] psg_a;
@@ -448,9 +478,9 @@ oricatmos oricatmos
 (
 	.clk_in           (clk_sys),
 	.RESET            (reset),
-	.key_pressed      (ps2_key[9]),
-	.key_code         (ps2_key[7:0]),
-	.key_extended     (ps2_key[8]),
+	.key_pressed      (kbd_ps2_key[9]),
+	.key_code         (kbd_ps2_key[7:0]),
+	.key_extended     (kbd_ps2_key[8]),
 	.key_strobe       (key_strobe),
 	.PSG_OUT_A        (psg_a),
 	.PSG_OUT_B        (psg_b),
@@ -627,11 +657,8 @@ assign AUDIO_R = (stereo == 2'b00) ? {1'b0,psg_out+tapeAudio,1'b0} : (stereo == 
 wire casdout;
 wire cas_relay;
 
-wire        load_tape = ioctl_index==1;
-wire        load_sna  = ioctl_index==4;
 reg  [15:0] tape_end;
 reg         tape_loaded = 1'b0;
-reg         ioctl_downlD;
 
 wire [15:0] tape_addr;
 wire [7:0]  tape_data;
@@ -683,8 +710,6 @@ wire [15:0] tap_ram_addr;
 wire  [7:0] tap_ram_data;
 wire        tap_ram_we;
 wire [15:0] tap_cache_addr;
-wire        tap_load_pulse = ioctl_downlD && ~ioctl_download && load_tape;
-
 tap_segment_loader tap_seg (
 	.clk_sys        (clk_sys),
 	.reset          (reset),

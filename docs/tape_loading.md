@@ -3,6 +3,21 @@
 The core supports two tape-loading paths, selected by the **Smart
 CLOAD** P1 menu option:
 
+## Autoload TAP = On (default)
+
+After an F1 `.tap` selection finishes, the core resets the Oric, waits
+for BASIC to reach the `READY` prompt, then injects `CLOAD""` followed
+by Return through the normal keyboard path. The selected tape remains
+buffered in `tapecache` across that reset.
+
+Autoload only starts the command. The actual loading path is still
+selected by the existing tape settings:
+
+- With **Smart CLOAD = On**, the patched ROM triggers the instant
+  `tap_segment_loader.v` path.
+- With **Smart CLOAD = Off**, the stock ROM reads the cassette audio
+  stream from the buffered TAP file.
+
 ## Smart CLOAD = On (default)
 
 The patched ROM at `$E85F-$E8BB` triggers `tap_segment_loader.v`,
@@ -55,8 +70,11 @@ hardware — not the ~30s I had estimated earlier.
 
 ## How to switch modes
 
-1. F1 to load the `.tap` file (preloads `tapecache`).
-2. Open the menu → P1 → **Smart CLOAD** → toggle as needed.
-3. Type `CLOAD""` at the BASIC `READY` prompt.
+1. Open the menu → P1 → **Smart CLOAD** → toggle as needed.
+2. F1 to load the `.tap` file. With **Autoload TAP = On**, the core
+   resets and types `CLOAD""` automatically.
+3. To use the old manual flow, set P1 → **Autoload TAP** to Off, F1 to
+   load the `.tap` file, then type `CLOAD""` at the BASIC `READY`
+   prompt.
 4. With Smart CLOAD Off + Tape Audio set to Low/High you'll hear
    the audio waveform during the load.
