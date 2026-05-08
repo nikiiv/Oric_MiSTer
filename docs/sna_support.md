@@ -8,7 +8,7 @@ signals, and the current implementation status.
 
 | Direction | State                                                                                  |
 | --------- | -------------------------------------------------------------------------------------- |
-| **LOAD**  | Working: RAM, CPU, AY register file + creg, VIA register file (12) + timers + IFR.     |
+| **LOAD**  | Working: RAM, CPU, AY register file + creg, VIA register file (12) + timers + IFR, ULA video mode. |
 | **SAVE**  | Not started.                                                                           |
 
 LOAD was built in three passes:
@@ -31,6 +31,15 @@ LOAD was built in three passes:
   `snapshot.c:67-74`); our initial little-endian capture loaded
   garbage values like `$3412` for a snap-time `$1234` and the timer
   restore appeared inert until the byte order was corrected.
+- **Post-v3 fixes** covered two loader edge cases found by Xenon3 and
+  Pulsoids. Pulsoids is 148,580 bytes, so the original 128 KiB
+  `snapcache` wrapped and corrupted later block parsing; the cache is
+  now 192 KiB. Xenon3 and Pulsoids both resume with PC in RAM, so
+  `S_DRAIN` now keeps `snap_active` asserted while reading `mem[PC]`
+  before releasing T65. Pulsoids also stores `OSN+16 vid_mode = 6`
+  (hires + 50 Hz); restoring RAM is not enough because the RTL ULA's
+  internal mode register only changes when a mode attribute is later
+  scanned. The loader now restores that ULA mode before CPU release.
 
 What's intentionally **not** restored — see [what's not yet
 implemented](#whats-not-yet-implemented) for the rationale and the
@@ -279,6 +288,11 @@ the 192 KiB cap; no compression needed.
 - **RAM restore:** during `S_BLK_DATA_RAM`, the snap state machine
   drives `snap_ram_addr/data/we` through a branch in the main spram
   address-mux — same Pattern B shape as `tap_segment_loader`.
+- **PC fetch preload:** during `S_DRAIN`, the loader holds `active`
+  and drives `ram_addr = snap_pc` with writes disabled. This lets the
+  main spram output settle to the restored PC opcode before the CPU
+  halt is released; otherwise snapshots resuming in RAM can fetch stale
+  `spram_q` from the loader's last RAM access.
 - **CPU register restore:** new `Regs_set[63:0]` + `Regs_set_we` ports
   on T65 with snap branches in three register-clock processes (PC/S +
   inflight state, P/X/Y/A, MCycle/RstCycle).
@@ -299,7 +313,9 @@ the 192 KiB cap; no compression needed.
 - **ULA mode restore:** `OSN+16` is captured and driven into the ULA
   during the pre-release drain window so snapshots that resume before
   the next mode attribute still select the correct text/hires and
-  50/60 Hz state.
+  50/60 Hz state. This is required for Pulsoids, whose current hires
+  screen does not put a mode attribute at the first scanned byte after
+  restore.
 - **Debug visibility:** optional `SNAP_DEBUG` Verilog macro paints the
   captured CPU regs at row 10 of the text screen so you can verify the
   decoder visually. Turn it on with `tools/oric-build --snap-debug`;
@@ -385,7 +401,22 @@ python3 tools/sna-inspect.py path/to/snapshot.sna
    flags + IFR restore) the game resumes and runs cleanly. The
    T1C/T2C big-endian fix was the load-bearing change — earlier v3
    builds with little-endian capture appeared inert. **DONE.**
-6. **SAVE round-trip** — save snapshot from MiSTer, load it in
+6. **Large snapshot cache test** — Pulsoids is 148,580 bytes and was
+   the only current snapshot found above the old 128 KiB cache limit.
+   The cache is now 192 KiB with guarded download writes, so Pulsoids'
+   later `CPU`/`AY`/`VIA` blocks parse from the correct offsets instead
+   of wrapped data. **DONE.**
+7. **PC preload test** — Xenon3 and Pulsoids both resume with PC in
+   restored RAM (`Xenon3=$3DDF`, `Pulsoids=$710E`). Keeping the loader's
+   RAM mux active through `S_DRAIN` and reading `mem[PC]` before CPU
+   release fixed stale-opcode fetches; Xenon3 now loads and runs.
+   **DONE.**
+8. **Pulsoids ULA mode test** — `tools/sna-inspect.py` reports
+   `vid_mode 6` for Pulsoids. Without restoring `OSN+16`, music resumes
+   but graphics stay in the wrong mode because the ULA waits for a
+   scanned mode attribute. Loading `lREG_MODE` during `S_DRAIN` restores
+   hires + 50 Hz before execution continues. **DONE.**
+9. **SAVE round-trip** — save snapshot from MiSTer, load it in
    Oricutron (and the reverse), verify the program continues running
    visually/audibly. **NOT DONE** — SAVE direction not yet implemented.
 
