@@ -8,7 +8,8 @@ the repository root unless noted.
 
 - `oric-build` compiles `Oric.qpf` inside the `raetro/quartus:mister` Docker
   image. By default it also deploys the generated `output_files/Oric.rbf` to
-  `root@192.168.0.108:/media/fat/_Aoric`.
+  `root@192.168.0.108:/media/fat/_Aoric` for development and refreshes the
+  official `/media/fat/_Computer/Oric_YYYYMMDD.rbf` used by MGL launchers.
 - Useful options:
   - `--no-deploy` compiles only.
   - `--clean` removes `db`, `incremental_db`, and `output_files` before build.
@@ -16,8 +17,9 @@ the repository root unless noted.
   - `--snap-debug` injects `SNAP_DEBUG=1` to paint captured snapshot CPU
     registers on the text screen after load.
 - The script expects to be run from the repo root and checks for `Oric.qpf`.
-  Deploys are timestamped with the current date/time and short git SHA, then
-  copied to a stable `Oric.rbf` name on the MiSTer.
+  Dev deploys are timestamped with the current date/time and short git SHA,
+  then copied to a stable `_Aoric/Oric.rbf` name. The official deploy removes
+  previous `_Computer/Oric*.rbf` files and uploads a date-stamped core.
 
 Example:
 
@@ -40,7 +42,7 @@ Example:
 Example:
 
 ```sh
-python3 tools/tape-inspect.py --basic tap/example.tap
+python3 tools/tape-inspect.py --basic games/Oric/tap/example.tap
 ```
 
 - `splitter.py` splits a multi-segment `.tap` into one self-contained file per
@@ -51,8 +53,8 @@ python3 tools/tape-inspect.py --basic tap/example.tap
 Example:
 
 ```sh
-python3 tools/splitter.py tap/game.tap
-python3 tools/splitter.py --force tap/game.tap
+python3 tools/splitter.py games/Oric/tap/game.tap
+python3 tools/splitter.py --force games/Oric/tap/game.tap
 ```
 
 - `merger.py` concatenates one or more `.tap` files into a single multi-segment
@@ -63,8 +65,8 @@ python3 tools/splitter.py --force tap/game.tap
 Example:
 
 ```sh
-python3 tools/merger.py -o tap/combined.tap tap/part1.tap tap/part2.tap
-python3 tools/merger.py -o tap/combined.tap --replace-cload tap/loader.tap tap/payload.tap
+python3 tools/merger.py -o games/Oric/tap/combined.tap games/Oric/tap/part1.tap games/Oric/tap/part2.tap
+python3 tools/merger.py -o games/Oric/tap/combined.tap --replace-cload games/Oric/tap/loader.tap games/Oric/tap/payload.tap
 ```
 
 ## Snapshot inspection
@@ -80,7 +82,7 @@ python3 tools/merger.py -o tap/combined.tap --replace-cload tap/loader.tap tap/p
 Example:
 
 ```sh
-python3 tools/sna-inspect.py snapshots/example.sna
+python3 tools/sna-inspect.py games/Oric/snapshots/example.sna
 ```
 
 ## Notes

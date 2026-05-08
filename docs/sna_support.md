@@ -48,7 +48,7 @@ remaining v4 candidate list.
 ## Why snapshots
 
 The DMA tape loader breaks any program that self-relocates between
-segments (e.g. `tap/scubadive.tap`'s BASIC loader at `$0501` that copies
+segments (e.g. `games/Oric/tap/scubadive.tap`'s BASIC loader at `$0501` that copies
 itself to `$8501`, then CLOADs MC payloads that overwrite `$0400-$3400`).
 Rather than reverse-engineering each loader's quirks, we capture the
 full machine state once after the program is loaded and running, then

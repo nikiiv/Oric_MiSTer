@@ -14,7 +14,8 @@ set -euo pipefail
 
 # === Config ===
 MISTER_HOST="root@192.168.0.108"
-MISTER_DIR="/media/fat/_Aoric"
+MISTER_DEV_DIR="/media/fat/_Aoric"
+MISTER_OFFICIAL_DIR="/media/fat/_Computer"
 CORE_NAME="Oric"
 QPF_FILE="${CORE_NAME}.qpf"
 RBF_OUT="output_files/${CORE_NAME}.rbf"
@@ -129,18 +130,29 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 REMOTE_NAME="${CORE_NAME}_${STAMP}_${SHA}.rbf"
 
-echo ">>> Deploying to ${MISTER_HOST}:${MISTER_DIR}/${REMOTE_NAME}"
+OFFICIAL_NAME="${CORE_NAME}_$(date +%Y%m%d).rbf"
+
+echo ">>> Deploying dev core to ${MISTER_HOST}:${MISTER_DEV_DIR}/${REMOTE_NAME}"
 
 ssh -o StrictHostKeyChecking=accept-new "${MISTER_HOST}" \
-    "mkdir -p '${MISTER_DIR}'"
+    "mkdir -p '${MISTER_DEV_DIR}' '${MISTER_OFFICIAL_DIR}'"
 
 scp "${RBF_OUT}" \
-    "${MISTER_HOST}:${MISTER_DIR}/${REMOTE_NAME}"
+    "${MISTER_HOST}:${MISTER_DEV_DIR}/${REMOTE_NAME}"
 
 # Drop a stable name for "latest" so MiSTer always finds something
 ssh "${MISTER_HOST}" \
-    "cp '${MISTER_DIR}/${REMOTE_NAME}' '${MISTER_DIR}/${CORE_NAME}.rbf'"
+    "cp '${MISTER_DEV_DIR}/${REMOTE_NAME}' '${MISTER_DEV_DIR}/${CORE_NAME}.rbf'"
+
+echo ">>> Deploying official core to ${MISTER_HOST}:${MISTER_OFFICIAL_DIR}/${OFFICIAL_NAME}"
+
+ssh "${MISTER_HOST}" \
+    "rm -f '${MISTER_OFFICIAL_DIR}/${CORE_NAME}.rbf' '${MISTER_OFFICIAL_DIR}/${CORE_NAME}'_*.rbf"
+
+scp "${RBF_OUT}" \
+    "${MISTER_HOST}:${MISTER_OFFICIAL_DIR}/${OFFICIAL_NAME}"
 
 echo ">>> Done."
-echo "    ${MISTER_DIR}/${REMOTE_NAME}     (timestamped)"
-echo "    ${MISTER_DIR}/${CORE_NAME}.rbf   (latest)"
+echo "    ${MISTER_DEV_DIR}/${REMOTE_NAME}       (dev timestamped)"
+echo "    ${MISTER_DEV_DIR}/${CORE_NAME}.rbf     (dev latest)"
+echo "    ${MISTER_OFFICIAL_DIR}/${OFFICIAL_NAME}  (official)"
