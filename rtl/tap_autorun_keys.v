@@ -4,7 +4,7 @@
 // When a TAP finishes downloading, this FSM can request a normal Oric reset,
 // wait for BASIC to reach READY, then inject CLOAD"" + Return as PS/2 events.
 // It deliberately drives the existing keyboard path instead of poking BASIC
-// internals so Smart CLOAD and the original audio tape path both work.
+// internals so all Tape Load modes work.
 //============================================================================
 
 module tap_autorun_keys #(

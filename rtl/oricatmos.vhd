@@ -129,7 +129,7 @@ ENTITY oricatmos IS
 		ula_snap_mode_we : IN STD_LOGIC := '0';
 		ula_snap_mode   : IN STD_LOGIC_VECTOR(2 DOWNTO 0) := (OTHERS => '0');
 
-		-- Smart CLOAD live ROM patch: when patch_active='1', the CPU
+		-- Tape-load live ROM patch: when patch_active='1', the CPU
 		-- reads patch_data instead of the selected ROM source.
 		patch_active    : IN  STD_LOGIC := '0';
 		patch_data      : IN  STD_LOGIC_VECTOR(7 DOWNTO 0) := (OTHERS => '0');
@@ -138,7 +138,14 @@ ENTITY oricatmos IS
 		-- to $C000; c000_data carries the byte being written. Driven
 		-- to the MiSTer USER LED in Oric.sv.
 		c000_we         : OUT STD_LOGIC;
-		c000_data       : OUT STD_LOGIC_VECTOR(7 DOWNTO 0)
+		c000_data       : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+
+		-- Fast TAP byte streamer. The patched GETTAPEBYTE routine
+		-- embeds the current TAP byte as an immediate operand at
+		-- $E6CE; this strobe advances the prefetcher after that byte
+		-- has been fetched.
+		tape_byte_enable : IN  STD_LOGIC := '0';
+		tap_byte_consume : OUT STD_LOGIC
 	);
 END;
 
@@ -570,20 +577,28 @@ BEGIN
 	                AND cpu_ad(15 DOWNTO 0) = X"C000"
 	           ELSE '0';
 	c000_data <= cpu_do;
+	tap_byte_consume <= '1' WHEN ula_phi2 = '1'
+	                         AND cpu_rw = '1'
+	                         AND tape_byte_enable = '1'
+	                         AND ula_CSROMn = '0'
+	                         AND cont_MAPn = '1'
+	                         AND cont_ROMDISn = '1'
+	                         AND cpu_ad(13 DOWNTO 0) = STD_LOGIC_VECTOR(TO_UNSIGNED(16#26CE#, 14))
+	                    ELSE '0';
 
 
 	PROCESS BEGIN
 
 		WAIT UNTIL rising_edge(clk_in);
 	
-		-- Smart CLOAD live ROM patch — wins over every ROM source.
+		-- Tape-load live ROM patch — wins over every ROM source.
 		-- Gate on ula_CSROMn='0' so we only override during reads
 		-- inside the ROM window ($C000-$FFFF). Without this gate the
 		-- override fires for any low-RAM read whose low 14 bits land
 		-- in the patch range — e.g. cold-boot RAM detection writing/
 		-- reading $285F sees our patch byte instead of RAM, mistakes
 		-- it for end-of-RAM, and reports a tiny BYTES FREE.
-		IF    cpu_rw = '1' AND ula_phi2 = '1' AND patch_active = '1'
+		IF cpu_rw = '1' AND ula_phi2 = '1' AND patch_active = '1'
 		      AND ula_CSROMn = '0' AND cont_MAPn = '1' AND cont_ROMDISn = '1' THEN
 			cpu_di <= patch_data;
 			-- expansion port

@@ -1,8 +1,8 @@
 //============================================================================
-//  Multi-stage TAP segment loader (Smart CLOAD instant tape)
+//  Multi-stage TAP segment loader (Tape Load = Ultra)
 //
 //  Triggered by a single-cycle `trigger` pulse — driven from Oric.sv as
-//  (c000_we && c000_data == 1 && smart_cload_en && tape_loaded).
+//  (c000_we && c000_data == 1 && tape_mode_ultra && tape_loaded).
 //
 //  The patched BASIC CLOAD handler (see rtl/cload_patch_rom.v) fires the
 //  trigger every time the running program calls CLOAD. On each trigger
@@ -37,7 +37,7 @@
 module tap_segment_loader (
 	input         clk_sys,
 	input         reset,
-	input         trigger,            // c000_we && data==1 && smart_cload_en && tape_loaded
+	input         trigger,            // c000_we && data==1 && tape_mode_ultra && tape_loaded
 	input         tape_load_pulse,    // 1-cycle pulse on F1 download falling edge — resets next_scan_pos
 	input  [15:0] tape_end,           // last ioctl_addr seen during F1 download
 	input   [7:0] tape_data,          // tapecache q (read data)

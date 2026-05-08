@@ -70,14 +70,19 @@ code never writes to them.
 
 | Mailbox  | Strobe        | Data carried | Consumer                               |
 | -------- | ------------- | ------------ | -------------------------------------- |
-| `$C000`  | `c000_we`     | `c000_data`  | `Oric.sv` `led_user_pokeable` latch → `LED_USER` pin (value 1=on, 0=off); also fires `tap_segment_loader.v` when value==1 + `smart_cload_en` + `tape_loaded` |
+| `$C000`  | `c000_we`     | `c000_data`  | `Oric.sv` `led_user_pokeable` latch → `LED_USER` pin (value 1=on, 0=off); in Tape Load = Ultra also fires `tap_segment_loader.v` when value==1 + `tape_loaded` |
 
 The `$C000` mailbox is dual-use:
 - BASIC `POKE #C000, 1` lights `LED_USER` (Atmos POKE issues an
   unconditional `STA ($33),Y` per `docs/Oric Rom.md:3333`).
-- The Smart CLOAD patch ROM at `$E85F-$E8BB` is a NOP-sled ending
+- The Ultra tape patch ROM at `$E85F-$E8BB` is a NOP-sled ending
   with `LDA #$01 / STA $C000` — that fires the same mailbox to
   trigger a tape-segment load via `tap_segment_loader.v`.
+
+Fast tape loading does not use a CPU-visible mailbox. It patches
+`$E6C9` so the next TAP byte from `tap_byte_streamer.v` appears as
+the immediate operand of `LDA #imm`, then advances the prefetcher
+when the CPU fetches that operand.
 
 ## Pattern B — core → 6502: halt + paint via spram bus
 
