@@ -47,11 +47,29 @@ fi
 REPO_ROOT="$(pwd)"
 : "${REPO_ROOT:?REPO_ROOT not set}"
 
+QSF_BACKUP=""
+MACROS_TCL=""
+cleanup_build_files() {
+    local rc=$?
+    if [[ -n "${QSF_BACKUP}" && -f "${QSF_BACKUP}" ]]; then
+        cp "${QSF_BACKUP}" "${CORE_NAME}.qsf"
+        rm -f "${QSF_BACKUP}"
+    fi
+    if [[ -n "${MACROS_TCL}" && -f "${MACROS_TCL}" ]]; then
+        rm -f "${MACROS_TCL}"
+    fi
+    return "${rc}"
+}
+
 # === Optional: clean build dirs ===
 if [[ ${CLEAN} -eq 1 ]]; then
     echo ">>> Cleaning Quartus build directories..."
     rm -rf db incremental_db output_files
 fi
+
+QSF_BACKUP="$(mktemp)"
+cp "${CORE_NAME}.qsf" "${QSF_BACKUP}"
+trap cleanup_build_files EXIT INT TERM
 
 # === Compile ===
 echo ">>> Compiling ${CORE_NAME} (this takes 15–40 minutes)..."
@@ -59,23 +77,24 @@ START=$(date +%s)
 
 if [[ ${#MACROS[@]} -gt 0 ]]; then
     echo ">>> Building with Verilog macros: ${MACROS[*]}"
-    # Inject macros via a tiny TCL script so we don't pollute the qsf
+    MACROS_TCL="$(mktemp)"
+
+    # Inject macros via a tiny TCL script, then restore the pre-build qsf
+    # from the backup even if Quartus fails or the build is interrupted.
     {
         echo "project_open ${CORE_NAME}"
         for m in "${MACROS[@]}"; do
             echo "set_global_assignment -name VERILOG_MACRO \"${m}\""
         done
         echo "project_close"
-    } > /tmp/oric_macros.tcl
+    } > "${MACROS_TCL}"
     docker run --rm \
         --user "$(id -u):$(id -g)" \
         -v "${REPO_ROOT}:/build" \
-        -v /tmp/oric_macros.tcl:/tmp/oric_macros.tcl \
+        -v "${MACROS_TCL}:/tmp/oric_macros.tcl" \
         -w /build \
         "${DOCKER_IMAGE}" \
         bash -c "quartus_sh -t /tmp/oric_macros.tcl && quartus_sh --flow compile ${QPF_FILE}"
-    # Revert qsf so dev macros don't sneak into commits
-    git checkout -- "${CORE_NAME}.qsf" 2>/dev/null || true
 else
     docker run --rm \
         --user "$(id -u):$(id -g)" \
@@ -84,6 +103,9 @@ else
         "${DOCKER_IMAGE}" \
         quartus_sh --flow compile "${QPF_FILE}"
 fi
+
+cleanup_build_files
+trap - EXIT INT TERM
 
 ELAPSED=$(( $(date +%s) - START ))
 printf ">>> Compile finished in %dm%ds\n" $((ELAPSED/60)) $((ELAPSED%60))

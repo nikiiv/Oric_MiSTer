@@ -2,7 +2,7 @@
 //  Oric snapshot LOAD (.sna)
 //
 //  Triggered on the falling edge of ioctl_download with ioctl_index==4
-//  (the F4 menu entry). Buffers the .sna file in a 128 KiB internal
+//  (the F4 menu entry). Buffers the .sna file in a 192 KiB internal
 //  snapcache spram, then walks the Oricutron typed-block container and
 //  applies the captured state to RAM, the CPU, the AY chip and the VIA.
 //
@@ -65,19 +65,24 @@ module snap_loader (
 	output reg  [3:0] ay_snap_creg
 );
 
-reg  [16:0] snap_cache_addr;
+reg  [17:0] snap_cache_addr;
 wire [7:0]  snap_cache_q;
 
-spram #(.address_width(17)) snapcache (
+localparam [17:0] SNAP_CACHE_LAST = 18'd196607; // 192 KiB - 1
+wire snap_cache_dl_in_range = (ioctl_addr < 27'd196608);
+
+spram #(.address_width(18), .numwords(196608)) snapcache (
   .clock(clk_sys),
-  .address((ioctl_download && load_sna) ? ioctl_addr[16:0] : snap_cache_addr),
+  .address((ioctl_download && load_sna) ? ioctl_addr[17:0] : snap_cache_addr),
   .data(ioctl_dout),
-  .wren(ioctl_wr && load_sna),
+  .wren(ioctl_wr && load_sna && snap_cache_dl_in_range),
   .q(snap_cache_q)
 );
 
-reg  [16:0] snap_end;
-always @(posedge clk_sys) if (load_sna && ioctl_download) snap_end <= ioctl_addr[16:0];
+reg  [17:0] snap_end;
+always @(posedge clk_sys) if (load_sna && ioctl_download) begin
+	snap_end <= snap_cache_dl_in_range ? ioctl_addr[17:0] : SNAP_CACHE_LAST;
+end
 
 wire snap_trigger = ioctl_downlD && ~ioctl_download && load_sna;
 
@@ -171,7 +176,7 @@ always @(posedge clk_sys) begin
 			S_IDLE: begin
 				if (snap_trigger) begin
 					active          <= 1'b1;
-					snap_cache_addr <= 17'd0;
+					snap_cache_addr <= 18'd0;
 					hdr_byte_cnt    <= 2'd0;
 					blk_offset      <= 17'd0;
 					prev_tag        <= 32'd0;
@@ -189,7 +194,7 @@ always @(posedge clk_sys) begin
 			// Prime snapcache read pipeline so snap_cache_q corresponds
 			// to mem[0] when S_HDR_TAG starts. Same shape as DMA loader's D_INIT.
 			S_INIT: begin
-				snap_cache_addr <= 17'd1;
+				snap_cache_addr <= 18'd1;
 				snap_state      <= S_HDR_TAG;
 			end
 
@@ -211,7 +216,7 @@ always @(posedge clk_sys) begin
 						2'd2: blk_tag[15:8]  <= snap_cache_q;
 						2'd3: blk_tag[7:0]   <= snap_cache_q;
 					endcase
-					snap_cache_addr <= snap_cache_addr + 17'd1;
+					snap_cache_addr <= snap_cache_addr + 18'd1;
 					if (hdr_byte_cnt == 2'd3) begin
 						hdr_byte_cnt <= 2'd0;
 						snap_state   <= S_HDR_SIZE;
@@ -228,7 +233,7 @@ always @(posedge clk_sys) begin
 					2'd2: blk_size[15:8]  <= snap_cache_q;
 					2'd3: blk_size[7:0]   <= snap_cache_q;
 				endcase
-				snap_cache_addr <= snap_cache_addr + 17'd1;
+				snap_cache_addr <= snap_cache_addr + 18'd1;
 				if (hdr_byte_cnt == 2'd3) begin
 					hdr_byte_cnt <= 2'd0;
 					blk_offset   <= 17'd0;
@@ -251,7 +256,7 @@ always @(posedge clk_sys) begin
 					ram_data <= snap_cache_q;
 					ram_we   <= 1'b1;
 				end
-				snap_cache_addr <= snap_cache_addr + 17'd1;
+				snap_cache_addr <= snap_cache_addr + 18'd1;
 				blk_offset      <= blk_offset + 17'd1;
 				if (blk_offset == blk_size[16:0] - 17'd1) begin
 					blk_offset   <= 17'd0;
@@ -272,7 +277,7 @@ always @(posedge clk_sys) begin
 					8'd17: snap_p <= snap_cache_q;
 					default: ;
 				endcase
-				snap_cache_addr <= snap_cache_addr + 17'd1;
+				snap_cache_addr <= snap_cache_addr + 18'd1;
 				blk_offset      <= blk_offset + 17'd1;
 				if (blk_offset == blk_size[16:0] - 17'd1) begin
 					blk_offset   <= 17'd0;
@@ -304,7 +309,7 @@ always @(posedge clk_sys) begin
 					8'd16: snap_ay_regs[14] <= snap_cache_q;
 					default: ;
 				endcase
-				snap_cache_addr <= snap_cache_addr + 17'd1;
+				snap_cache_addr <= snap_cache_addr + 18'd1;
 				blk_offset      <= blk_offset + 17'd1;
 				if (blk_offset == blk_size[16:0] - 17'd1) begin
 					blk_offset   <= 17'd0;
@@ -341,7 +346,7 @@ always @(posedge clk_sys) begin
 					8'd31: snap_via_t2run    <= snap_cache_q[0]; // t2run flag
 					default: ;
 				endcase
-				snap_cache_addr <= snap_cache_addr + 17'd1;
+				snap_cache_addr <= snap_cache_addr + 18'd1;
 				blk_offset      <= blk_offset + 17'd1;
 				if (blk_offset == blk_size[16:0] - 17'd1) begin
 					blk_offset   <= 17'd0;
@@ -352,7 +357,7 @@ always @(posedge clk_sys) begin
 
 			// Unknown / not-yet-handled block: advance past the payload.
 			S_SKIP: begin
-				snap_cache_addr <= snap_cache_addr + 17'd1;
+				snap_cache_addr <= snap_cache_addr + 18'd1;
 				blk_offset      <= blk_offset + 17'd1;
 				if (blk_offset == blk_size[16:0] - 17'd1) begin
 					blk_offset   <= 17'd0;
@@ -512,6 +517,8 @@ always @(posedge clk_sys) begin
 			// cycle (24 clk_sys cycles per phi2 half) so cpu_di settles to
 			// mem[loaded_PC] before we let T65 fetch its first opcode.
 			S_DRAIN: begin
+				ram_addr       <= snap_pc;
+				ram_we         <= 1'b0;
 				snap_drain_cnt <= snap_drain_cnt + 10'd1;
 				if (snap_drain_cnt == 10'd1023) snap_state <= S_DONE;
 			end

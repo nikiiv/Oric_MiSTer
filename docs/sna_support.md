@@ -52,7 +52,7 @@ desktop emulator (`pete-gordon/oricutron`).
 
 - **Extension:** `.sna`
 - **Endianness:** big-endian for all multi-byte numeric fields
-- **Container:** sequence of typed blocks; max file size 256 KiB
+- **Container:** sequence of typed blocks; max file size 192 KiB
 - **Authoritative reference:** `snapshot.c` in
   https://github.com/pete-gordon/oricutron. The field tables below were
   cross-checked against that source and validated by walking a real
@@ -267,12 +267,12 @@ Total                            ≈  82194 bytes (~80 KiB)
 Reference: a real Oricutron save of scubadive is **99,778 bytes** —
 that includes optional `TAP` (46 + tape buffer 13830), `PCH` (76),
 and `SYR` (3600) blocks. Our minimal save will be ~80 KiB. Well under
-the 256 KiB cap; no compression needed.
+the 192 KiB cap; no compression needed.
 
 ## Implementation snapshot (where things landed)
 
 - **Menu / trigger:** `F4,SNA,Load Snapshot;` in `Oric.sv`, ioctl_index
-  `4`. File is buffered in a new 128 KiB `snapcache` spram, then a state
+  `4`. File is buffered in a 192 KiB `snapcache` spram, then a state
   machine walks the typed-block container after `ioctl_download` falls.
 - **CPU halt:** `snap_active` is OR'd into the `cpu_halt` chain feeding
   `oricatmos.cpu_halt` alongside `tap_active`.
