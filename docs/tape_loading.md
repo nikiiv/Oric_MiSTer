@@ -1,7 +1,7 @@
 # Tape loading notes
 
-The core supports two tape-loading paths, selected by the **Smart
-CLOAD** P1 menu option:
+The core supports three tape-loading paths, selected by the **Tape
+Load** P1 menu option:
 
 ## Autoload TAP = On (default)
 
@@ -13,32 +13,52 @@ buffered in `tapecache` across that reset.
 Autoload only starts the command. The actual loading path is still
 selected by the existing tape settings:
 
-- With **Smart CLOAD = On**, the patched ROM triggers the instant
+- **Ultra** patches CLOAD and triggers the instant
   `tap_segment_loader.v` path.
-- With **Smart CLOAD = Off**, the stock ROM reads the cassette audio
-  stream from the buffered TAP file.
+- **Fast** patches the ROM cassette sync/byte routines and feeds TAP
+  bytes from `tapecache` through the patched `GETTAPEBYTE` routine.
+- **Off** leaves the ROM untouched; the stock ROM reads the cassette
+  audio stream from the buffered TAP file.
 
-## Smart CLOAD = On (default)
+## Tape Load = Fast (default)
+
+Fast mode keeps the ROM's byte-by-byte load flow, but replaces the
+slow cassette timing routines:
+
+- `$E735` (`SYNCTAPE`) returns immediately; the ROM's caller still
+  reads bytes until it sees the TAP `$24` marker.
+- `$E6C9` (`GETTAPEBYTE`) preserves X/Y and returns the next TAP
+  byte from `tap_byte_streamer.v` via a patched `LDA #imm`.
+
+This targets custom loaders that bypass the CLOAD body but still call
+the ROM tape routines. It does not cover loaders that implement their
+own VIA/timer cassette decoder.
+
+Fast is the preferred default: it keeps the ROM in charge of parsing
+headers, filenames, BASIC setup, machine-code loading, and autorun
+decisions, while only replacing the slow cassette byte acquisition.
+
+## Tape Load = Ultra
 
 The patched ROM at `$E85F-$E8BB` triggers `tap_segment_loader.v`,
 which copies one segment per `CLOAD` from the in-FPGA `tapecache`
 spram directly into RAM. Loads finish in milliseconds and audio
 isn't used.
 
-Works for tapes whose multi-stage loaders re-enter the standard
-CLOAD body (gravitor, MEMORIA, scubadive, single-segment BASIC
-tapes, etc.). The NOP-sled in `cload_patch_rom.v` covers the common
-re-entry addresses.
+Ultra remains available for instant segment loading, but Fast is more
+compatible because the original ROM still performs the tape-load state
+updates. The NOP-sled in `cload_patch_rom.v` covers common re-entry
+addresses for tapes whose multi-stage loaders re-enter the standard
+CLOAD body.
 
-## Smart CLOAD = Off (audio cassette emulation)
+## Tape Load = Off (audio cassette emulation)
 
 The unpatched ROM runs the original tape decoder, reading bit
 timing off VIA timer 2 from the audio waveform produced by
 `cassette.v` + `cas_sig_gen.v`. Real ~2400-baud cassette speed.
 
-Use this when Smart CLOAD doesn't work for a tape — typically tapes
-whose multi-stage MC loaders read tape directly via `$E735` /
-`$E6C9` (DIY decoders) rather than re-entering CLOAD.
+Use this for maximum compatibility with code that reads the cassette
+VIA/timer behavior directly instead of using the ROM routines.
 
 **Wall-clock load times are slow.** Empirically:
 
@@ -53,10 +73,8 @@ hardware — not the ~30s I had estimated earlier.
 
 ## Known limitations
 
-- **welcome.tap-style "DIY MC loader" tapes** that bypass CLOAD and
-  decode tape directly via VIA T2 / `$E735` / `$E6C9` will only
-  load via the audio path (Smart CLOAD = Off). See section above
-  for expected load time.
+- **Raw VIA cassette loaders** that decode VIA T2 / CB1 directly still
+  require Tape Load = Off.
 - **Tape Turbo** (faster audio-path decode via ROM threshold
   patching) was prototyped on the abandoned `turbo_fast_loader`
   branch and didn't reach a working state — the BASIC ROM's pulse
@@ -70,11 +88,11 @@ hardware — not the ~30s I had estimated earlier.
 
 ## How to switch modes
 
-1. Open the menu → P1 → **Smart CLOAD** → toggle as needed.
+1. Open the menu → P1 → **Tape Load** → select Fast, Ultra, or Off.
 2. F1 to load the `.tap` file. With **Autoload TAP = On**, the core
    resets and types `CLOAD""` automatically.
 3. To use the old manual flow, set P1 → **Autoload TAP** to Off, F1 to
    load the `.tap` file, then type `CLOAD""` at the BASIC `READY`
    prompt.
-4. With Smart CLOAD Off + Tape Audio set to Low/High you'll hear
+4. With Tape Load Off + Tape Audio set to Low/High you'll hear
    the audio waveform during the load.

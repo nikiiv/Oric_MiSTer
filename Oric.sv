@@ -235,7 +235,7 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1O[51:50],Tape Audio,Mute,Low,High;",
 	"P1O[52],Tape Input,File,ADC;",
-	"P1O[56],Smart CLOAD,On,Off;",
+	"P1O[59:58],Tape Load,Fast,Ultra,Off;",
 	"P1O[57],Autoload TAP,On,Off;",
 	"P1-;",
 	"P1O[55:54],Joystick Adapter,None,PASE,IJK;",
@@ -258,8 +258,11 @@ wire [1:0] tapeVolume  = status[51:50];
 wire       tapeUseADC = status[52];
 wire       tapeRewind = status[53];
 wire [1:0] joystick_adapter = status[55:54];
-wire       smart_cload_en   = ~status[56];  // menu shows On (default) / Off
 wire       tap_autorun_en   = ~status[57];  // menu shows On (default) / Off
+wire [1:0] tape_load_mode   = status[59:58];
+wire       tape_mode_fast   = (tape_load_mode == 2'd0);
+wire       tape_mode_ultra  = (tape_load_mode == 2'd1);
+wire       tape_mode_off    = (tape_load_mode >= 2'd2);
 
 ///////////////////////////////////////////////////
 
@@ -430,6 +433,10 @@ wire        r, g, b;
 wire        hs, vs, HBlank, VBlank;
 wire        clk_pix;
 wire        tape_in, tape_out;
+wire        tap_byte_consume;
+wire        tap_byte_active;
+wire [15:0] tap_byte_cache_addr;
+wire  [7:0] tap_byte_data;
 
 wire [15:0] ram_ad;
 wire [15:0] spram_addr;
@@ -536,7 +543,7 @@ oricatmos oricatmos
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
 	.sd_din_strobe    (0),
-	.cpu_halt         (snap_active | tap_active),
+	.cpu_halt         (snap_active | tap_active | tap_byte_active),
 	.cpu_regs_set     (cpu_regs_set),
 	.cpu_regs_set_we  (cpu_regs_set_we),
 	.via_snap_we      (via_snap_we),
@@ -561,7 +568,9 @@ oricatmos oricatmos
 	.patch_active     (cload_patch_active),
 	.patch_data       (cload_patch_data),
 	.c000_we          (c000_we),
-	.c000_data        (c000_data)
+	.c000_data        (c000_data),
+	.tape_byte_enable (tape_mode_fast),
+	.tap_byte_consume (tap_byte_consume)
 );
 
 
@@ -625,16 +634,15 @@ spram #(.address_width(14)) altbios (
   .q(bios_din)
 );
 
-// Smart CLOAD: live read-side override. cload_patch_rom watches the
-// CPU address bus and asserts patch_active when smart_cload_en is on
-// AND the address falls inside one of its patch ranges. oricatmos.vhd
-// substitutes patch_data for cpu_di in that case — works for the
-// built-in Atmos/Oric 1 ROMs and the loadable BIOS alike, no ioctl
-// re-load required.
+// Tape live ROM patches. Ultra mode patches CLOAD into the instant
+// segment loader. Fast mode patches ROM cassette sync/byte routines
+// into the byte streamer. Off mode leaves the ROM untouched.
 wire        cload_patch_active;
 wire  [7:0] cload_patch_data;
 cload_patch_rom cload_patch_rom (
-	.enable      (smart_cload_en),
+	.ultra_enable(tape_mode_ultra),
+	.fast_enable (tape_mode_fast),
+	.fast_byte_data(tap_byte_data),
 	.rom_addr    (bios_addr[13:0]),
 	.patch_active(cload_patch_active),
 	.patch_data  (cload_patch_data)
@@ -668,6 +676,7 @@ spram #(.address_width(16)) tapecache (
 
   .address((ioctl_download && load_tape) ? ioctl_addr :
            tap_active                    ? tap_cache_addr :
+           tap_byte_active               ? tap_byte_cache_addr :
                                            tape_addr),
   .data(ioctl_dout),
   .wren(ioctl_wr && load_tape),
@@ -689,7 +698,7 @@ cassette cassette (
   .clk(clk_sys),
   .reset(reset),
   .rewind(tapeRewind | (load_tape && ioctl_download)),
-  .en(cas_relay && tape_loaded && ~tapeUseADC),
+  .en(cas_relay && tape_loaded && ~tapeUseADC && tape_mode_off),
   .tape_addr(tape_addr),
   .tape_data(tape_data),
 
@@ -713,7 +722,7 @@ wire [15:0] tap_cache_addr;
 tap_segment_loader tap_seg (
 	.clk_sys        (clk_sys),
 	.reset          (reset),
-	.trigger        (c000_we && c000_data == 8'd1 && smart_cload_en && tape_loaded),
+	.trigger        (c000_we && c000_data == 8'd1 && tape_mode_ultra && tape_loaded),
 	.tape_load_pulse(tap_load_pulse),
 	.tape_end       (tape_end),
 	.tape_data      (tape_data),
@@ -722,6 +731,23 @@ tap_segment_loader tap_seg (
 	.ram_addr       (tap_ram_addr),
 	.ram_data       (tap_ram_data),
 	.ram_we         (tap_ram_we)
+);
+
+// ---- Fast TAP byte streamer (rtl/tap_byte_streamer.v) ----
+// Used by Tape Load = Fast. The patched ROM GETTAPEBYTE routine
+// embeds tap_byte_data as an immediate operand; each operand fetch
+// consumes one byte and prefetches the next one.
+tap_byte_streamer tap_byte_streamer (
+	.clk_sys        (clk_sys),
+	.reset          (reset),
+	.consume        (tap_byte_consume && tape_mode_fast && tape_loaded),
+	.tape_load_pulse(tap_load_pulse),
+	.rewind         (tapeRewind),
+	.tape_end       (tape_end),
+	.tape_data      (tape_data),
+	.cache_addr     (tap_byte_cache_addr),
+	.active         (tap_byte_active),
+	.byte_data      (tap_byte_data)
 );
 
 // Host LED mailbox: oricatmos.vhd snoops CPU writes to $C000 and

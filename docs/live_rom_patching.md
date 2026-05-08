@@ -2,9 +2,9 @@
 
 How to swap bytes inside the Atmos BIOS (or Oric 1 BIOS, or a
 loadable .rom) at runtime, without modifying the ROM image on disk
-and without re-streaming the BIOS through the ioctl path. This is
-the mechanism the **Smart CLOAD** POC uses to hijack the CLOAD
-handler at `$E85F`.
+and without re-streaming the BIOS through the ioctl path. The tape
+loaders use it for both the Ultra CLOAD trampoline and the Fast ROM
+byte-routine patch.
 
 ## Why live patching
 
@@ -28,7 +28,7 @@ Three reasons we landed on this approach:
 
 ```
                           ┌──────────────────────┐
-       smart_cload_en ───►│                      │
+        tape load mode ───►│                      │
                           │  cload_patch_rom.v   │
        bios_addr[13:0] ──►│  (rtl/, Verilog)     │
                           │                      │──► patch_active
@@ -65,8 +65,8 @@ fetches inside the patched address range.
 ### 1. Range check
 
 ```verilog
-wire in_cload_trampoline = (rom_addr >= 14'h285F) && (rom_addr <= 14'h2863);
-assign patch_active = enable && in_cload_trampoline;
+wire in_cload_trampoline = (rom_addr >= 14'h285F) && (rom_addr <= 14'h28BB);
+assign patch_active = ultra_enable && in_cload_trampoline;
 ```
 
 `rom_addr` is the 14-bit BIOS offset (= `cpu_ad[13:0]`, since the
@@ -96,9 +96,10 @@ no clocked logic — the synthesiser tends to pack these efficiently.
 
 ### 3. Enable gate
 
-`enable` is wired to a status bit (`smart_cload_en = status[56]` in
-the current example). When low, `patch_active` is forced to 0 and
-the CPU sees the original ROM. When high, the patch is live.
+The current tape patches are selected by the two-bit Tape Load menu
+mode. Ultra enables the CLOAD trampoline, Fast enables the ROM
+cassette sync/byte patches, and Off forces `patch_active` to 0 so
+the CPU sees the original ROM.
 
 ## Address-space layout
 
@@ -119,7 +120,7 @@ labelled address.
 ## Combining with bus-snoop mailboxes
 
 Live patching becomes useful when paired with a snoop trigger
-(`docs/oric_to_core_comm.md` Pattern A). The Smart CLOAD example:
+(`docs/oric_to_core_comm.md` Pattern A). The Ultra tape loader example:
 
 1. Patch CLOAD body with a NOP sled at `$E85F-$E8B6` ending in
    `LDA #$01 / STA $C000` at `$E8B7`.
@@ -135,6 +136,12 @@ So the patch is the *trampoline* into a host handler. The actual
 work happens in Verilog, not 6502. This pattern is far cheaper than
 writing 200-byte 6502 routines, and the patched code is just a
 2-3 instruction handoff.
+
+Fast tape loading uses a different read-side-only pattern: `$E735`
+returns immediately and `$E6C9` returns the next TAP byte through a
+patched `LDA #imm`, with `tap_byte_streamer.v` advancing when the
+CPU fetches that immediate operand. It does not use a CPU-visible
+mailbox.
 
 Avoid using a `$02xx` system-RAM address as the mailbox — game
 code may write there for its own purposes and spuriously trigger

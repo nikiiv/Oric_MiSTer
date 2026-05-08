@@ -1,8 +1,8 @@
 //============================================================================
-//  Smart CLOAD patch ROM — live read-side override (NOP-sled design)
+//  Tape load patch ROM — live read-side override
 //
 //  Sits on the CPU read bus and substitutes patch bytes for specific
-//  ROM addresses when smart_cload_en is high.
+//  ROM addresses when Ultra or Fast tape loading is selected.
 //
 //  Patch range: $E85F-$E8BB (93 bytes), the body of the Atmos CLOAD
 //  handler at $E85B. Layout:
@@ -38,9 +38,9 @@
 //    data byte interpreted as opcode `$02` (KIL) and jam the CPU.
 //
 //    The NOP-sled fixes this: any JMP into $E85F-$E8B6 NOP-sleds to
-//    the trigger at $E8B7, fires another Smart CLOAD load, then
+//    the trigger at $E8B7, fires another Ultra tape load, then
 //    falls through to the original ROM at $E8BC for native autorun
-//    dispatch. Multi-stage tapes load every segment via Smart CLOAD
+//    dispatch. Multi-stage tapes load every segment via Ultra mode
 //    instead of falling back to slow audio-pin decode.
 //
 //  Sources for the relevant ROM addresses: docs/Oric Rom.md.
@@ -50,7 +50,9 @@
 //============================================================================
 
 module cload_patch_rom (
-	input         enable,           // smart_cload_en — gates the override entirely
+	input         ultra_enable,     // instant CLOAD segment loader patch
+	input         fast_enable,      // ROM tape byte routine patch
+	input  [7:0] fast_byte_data,    // TAP byte used as the LDA #imm operand
 	input  [13:0] rom_addr,         // bios_addr from oricatmos.vhd (= cpu_ad[13:0])
 	output        patch_active,     // 1 → CPU should read patch_data instead of ROM
 	output  [7:0] patch_data
@@ -58,26 +60,63 @@ module cload_patch_rom (
 
 // 14-bit ROM offset: CPU $E85F → bios offset $285F (= $E85F & $3FFF).
 wire in_cload_trampoline = (rom_addr >= 14'h285F) && (rom_addr <= 14'h28BB);
+wire in_fast_getbyte     = (rom_addr >= 14'h26C9) && (rom_addr <= 14'h26D8);
+wire in_fast_sync        = (rom_addr >= 14'h2735) && (rom_addr <= 14'h2737);
 
-assign patch_active = enable && in_cload_trampoline;
+assign patch_active = (ultra_enable && in_cload_trampoline) ||
+                      (fast_enable && (in_fast_getbyte || in_fast_sync));
 
 reg [7:0] data_r;
 always @(*) begin
-	case (rom_addr)
-		// $E8B7  LDA #$01
-		14'h28B7: data_r = 8'hA9;
-		14'h28B8: data_r = 8'h01;
-		// $E8B9  STA $C000          (trigger — halts CPU; loader runs;
-		//                            populates $02A9-$02AE / $9A/$9B;
-		//                            CPU resumes at $E8BC = original ROM PLP)
-		14'h28B9: data_r = 8'h8D;
-		14'h28BA: data_r = 8'h00;
-		14'h28BB: data_r = 8'hC0;
-		// $E85F-$E8B6: 88-byte NOP sled. Default below covers it.
-		// (Default is also harmless outside the patch range because
-		//  patch_active is gated on in_cload_trampoline.)
-		default:  data_r = 8'hEA; // NOP
-	endcase
+	data_r = 8'hEA; // NOP default for patched padding bytes.
+
+	if (fast_enable && in_fast_getbyte) begin
+		case (rom_addr)
+			// $E6C9: preserve Y/X, load next TAP byte as an immediate,
+			// mirror it to $2F, restore Y/X, return A=$2F.
+			14'h26C9: data_r = 8'h98; // TYA
+			14'h26CA: data_r = 8'h48; // PHA
+			14'h26CB: data_r = 8'h8A; // TXA
+			14'h26CC: data_r = 8'h48; // PHA
+			14'h26CD: data_r = 8'hA9; // LDA #fast_byte_data
+			14'h26CE: data_r = fast_byte_data;
+			14'h26CF: data_r = 8'h85; // STA $2F
+			14'h26D0: data_r = 8'h2F;
+			14'h26D1: data_r = 8'h68; // PLA
+			14'h26D2: data_r = 8'hAA; // TAX
+			14'h26D3: data_r = 8'h68; // PLA
+			14'h26D4: data_r = 8'hA8; // TAY
+			14'h26D5: data_r = 8'hA5; // LDA $2F
+			14'h26D6: data_r = 8'h2F;
+			14'h26D7: data_r = 8'h60; // RTS
+			14'h26D8: data_r = 8'hEA; // padding
+			default:  data_r = 8'hEA;
+		endcase
+	end
+	else if (fast_enable && in_fast_sync) begin
+		case (rom_addr)
+			// $E735: bypass cassette pulse sync. The ROM's TAPESYNC
+			// caller still reads bytes until it sees the $24 marker.
+			14'h2735: data_r = 8'hA2; // LDX #$00
+			14'h2736: data_r = 8'h00;
+			14'h2737: data_r = 8'h60; // RTS
+			default:  data_r = 8'hEA;
+		endcase
+	end
+	else begin
+		case (rom_addr)
+			// $E8B7  LDA #$01
+			14'h28B7: data_r = 8'hA9;
+			14'h28B8: data_r = 8'h01;
+			// $E8B9  STA $C000          (trigger — halts CPU; loader runs;
+			//                            populates $02A9-$02AE / $9A/$9B;
+			//                            CPU resumes at $E8BC = original ROM PLP)
+			14'h28B9: data_r = 8'h8D;
+			14'h28BA: data_r = 8'h00;
+			14'h28BB: data_r = 8'hC0;
+			default:  data_r = 8'hEA;
+		endcase
+	end
 end
 assign patch_data = data_r;
 

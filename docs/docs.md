@@ -11,8 +11,8 @@ communication between the emulated 6502 and the FPGA core.
   Docker/Quartus prerequisites, compile-only and deploy modes, clean builds,
   debug macros, release artifact naming, and common build/deploy failures.
 - `tape_loading.md` is the short operational guide for tape loading. It
-  explains Smart CLOAD, the slower audio cassette fallback, which tapes need
-  each path, expected load times, and the menu steps for switching modes.
+  explains Tape Load Ultra/Fast/Off, expected load behavior, and the menu
+  steps for switching modes.
 - `sna_support.md` is the main reference for `.sna` snapshot support in this
   core. It documents the currently working LOAD path, the Oricutron block
   format, field-level mapping into RTL state, ignored blocks, unfinished SAVE
@@ -23,9 +23,9 @@ communication between the emulated 6502 and the FPGA core.
 - `oric_to_core_comm.md` describes runtime communication patterns between the
   6502 and the FPGA core. It covers bus-snooped write mailboxes, halting the CPU
   to access RAM through the spram mux, read-side ROM overrides, and the current
-  `$C000` mailbox used by Smart CLOAD and the user LED latch.
+  `$C000` user LED / Ultra tape trigger mailbox.
 - `live_rom_patching.md` explains the read-side ROM patch mechanism used by
-  Smart CLOAD. It documents why live patching is used, how
+  the tape loaders. It documents why live patching is used, how
   `rtl/cload_patch_rom.v` and the `oricatmos.vhd` read mux work, how ROM-space
   addresses map to 14-bit offsets, and how to add new synth-time patches.
 - `oricutron_snapshot_internals.md` summarizes Oricutron's own snapshot
@@ -47,11 +47,16 @@ communication between the emulated 6502 and the FPGA core.
 
 ## Current project state captured by the docs
 
-- Smart CLOAD is the default fast tape path. It patches the ROM around CLOAD,
-  snoops a write to `$C000`, then lets `tap_segment_loader.v` copy the next TAP
-  segment from `tapecache` into RAM and update BASIC state where needed.
-- Some tapes bypass the standard CLOAD path with custom machine-code loaders.
-  Those require Smart CLOAD off and use the original audio cassette emulation.
+- Tape Load = Fast is the default and preferred tape path. It leaves the ROM's
+  tape-load flow in charge while replacing cassette byte acquisition with a TAP
+  byte feeder.
+- Tape Load = Ultra patches the ROM around CLOAD, snoops a write to `$C000`,
+  then lets `tap_segment_loader.v` copy the next TAP segment from `tapecache`
+  into RAM and update BASIC state where needed.
+- Tape Load = Fast patches the ROM cassette sync/byte routines and feeds TAP
+  bytes through the patched `GETTAPEBYTE` immediate operand, covering custom
+  loaders that still call the ROM tape routines. Tape Load = Off preserves
+  original VIA cassette behavior.
 - Snapshot LOAD is implemented for RAM, CPU registers, AY registers/current
   register, VIA registers, VIA timers, active flags, and IFR source flags.
   Snapshot SAVE is not implemented.
