@@ -33,6 +33,9 @@ Example:
 - `tape-inspect.py` prints the structure of an Oric `.tap` file. It handles
   multi-segment tapes, reports sync/header/name/address information, and can
   detokenize BASIC payloads.
+- The core clamps TAP uploads at 160 KiB in its shared FPGA file cache.
+  Larger files can still be inspected, but the core will not cache bytes
+  beyond that limit.
 - Output modes:
   - `--short` is the default and shows a 10-byte preview per segment.
   - `--basic` detokenizes BASIC segments and previews machine-code segments.

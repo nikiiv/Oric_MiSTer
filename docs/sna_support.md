@@ -281,8 +281,9 @@ the 192 KiB cap; no compression needed.
 ## Implementation snapshot (where things landed)
 
 - **Menu / trigger:** `F4,SNA,Load Snapshot;` in `Oric.sv`, ioctl_index
-  `4`. File is buffered in a 192 KiB `snapcache` spram, then a state
-  machine walks the typed-block container after `ioctl_download` falls.
+  `4`. File is buffered in the 192 KiB shared FPGA file cache, then a
+  state machine walks the typed-block container after `ioctl_download`
+  falls.
 - **CPU halt:** `snap_active` is OR'd into the `cpu_halt` chain feeding
   `oricatmos.cpu_halt` alongside `tap_active`.
 - **RAM restore:** during `S_BLK_DATA_RAM`, the snap state machine

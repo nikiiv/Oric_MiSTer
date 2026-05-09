@@ -2,9 +2,9 @@
 //  Oric snapshot LOAD (.sna)
 //
 //  Triggered on the falling edge of ioctl_download with ioctl_index==4
-//  (the F4 menu entry). Buffers the .sna file in a 192 KiB internal
-//  snapcache spram, then walks the Oricutron typed-block container and
-//  applies the captured state to RAM, the CPU, the AY chip and the VIA.
+//  (the F4 menu entry). Walks the Oricutron typed-block container from
+//  the shared 192 KiB top-level filecache and applies the captured
+//  state to RAM, the CPU, the AY chip and the VIA.
 //
 //  Block format and field-level mapping documented in
 //  docs/sna_support.md. v1+v2 LOAD restores: 64 KiB main RAM, the 6502
@@ -25,10 +25,10 @@ module snap_loader (
 	input             reset,
 	input             ioctl_download,
 	input             ioctl_downlD,
-	input             ioctl_wr,
-	input      [26:0] ioctl_addr,
-	input       [7:0] ioctl_dout,
 	input             load_sna,           // ioctl_index == 4
+	input      [17:0] snap_end,
+	output reg [17:0] snap_cache_addr,
+	input       [7:0] snap_cache_q,
 
 	output reg        active,             // halts CPU + selects loader's RAM-write path
 	output reg [15:0] ram_addr,
@@ -67,25 +67,6 @@ module snap_loader (
 	output reg        ula_snap_mode_we,
 	output reg  [2:0] ula_snap_mode
 );
-
-reg  [17:0] snap_cache_addr;
-wire [7:0]  snap_cache_q;
-
-localparam [17:0] SNAP_CACHE_LAST = 18'd196607; // 192 KiB - 1
-wire snap_cache_dl_in_range = (ioctl_addr < 27'd196608);
-
-spram #(.address_width(18), .numwords(196608)) snapcache (
-  .clock(clk_sys),
-  .address((ioctl_download && load_sna) ? ioctl_addr[17:0] : snap_cache_addr),
-  .data(ioctl_dout),
-  .wren(ioctl_wr && load_sna && snap_cache_dl_in_range),
-  .q(snap_cache_q)
-);
-
-reg  [17:0] snap_end;
-always @(posedge clk_sys) if (load_sna && ioctl_download) begin
-	snap_end <= snap_cache_dl_in_range ? ioctl_addr[17:0] : SNAP_CACHE_LAST;
-end
 
 wire snap_trigger = ioctl_downlD && ~ioctl_download && load_sna;
 
@@ -200,7 +181,7 @@ always @(posedge clk_sys) begin
 				end
 			end
 
-			// Prime snapcache read pipeline so snap_cache_q corresponds
+			// Prime filecache read pipeline so snap_cache_q corresponds
 			// to mem[0] when S_HDR_TAG starts. Same shape as DMA loader's D_INIT.
 			S_INIT: begin
 				snap_cache_addr <= 18'd1;

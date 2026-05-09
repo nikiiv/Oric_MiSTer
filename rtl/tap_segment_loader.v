@@ -8,8 +8,8 @@
 //  trigger every time the running program calls CLOAD. On each trigger
 //  this module:
 //
-//    1. Halts the CPU (active=1) and grabs the spram + tapecache buses.
-//    2. Resumes scanning the tapecache from `next_scan_pos` (0 on the
+//    1. Halts the CPU (active=1) and grabs the spram + filecache buses.
+//    2. Resumes scanning the filecache from `next_scan_pos` (0 on the
 //       first call, "byte after the previous segment's payload" on
 //       later calls — so multi-segment tapes pull one segment per call,
 //       letting BASIC's inter-segment code run between).
@@ -39,10 +39,10 @@ module tap_segment_loader (
 	input         reset,
 	input         trigger,            // c000_we && data==1 && tape_mode_ultra && tape_loaded
 	input         tape_load_pulse,    // 1-cycle pulse on F1 download falling edge — resets next_scan_pos
-	input  [15:0] tape_end,           // last ioctl_addr seen during F1 download
-	input   [7:0] tape_data,          // tapecache q (read data)
+	input  [17:0] tape_end,           // last cached byte address from F1 download
+	input   [7:0] tape_data,          // shared filecache q (read data)
 
-	output reg [15:0] cache_addr,     // tapecache read address (used while active)
+	output reg [17:0] cache_addr,     // filecache read address (used while active)
 	output reg        active,         // halts CPU + selects loader's spram-write path
 	output reg [15:0] ram_addr,       // main spram address while active
 	output reg  [7:0] ram_data,
@@ -58,7 +58,7 @@ localparam T_IDLE   = 3'd0,
            T_DONE   = 3'd6;
 
 reg  [2:0]  state;
-reg  [15:0] bot_seg;
+reg  [17:0] bot_seg;
 reg         eos;             // saw the 0x24 marker → past sync, parsing header
 reg         name_done;
 reg  [15:0] data_start;
@@ -70,7 +70,7 @@ reg  [3:0]  fx_step;
 reg  [1:0]  drain_cnt;
 
 // Persistent across triggers — only cleared on reset or new tape.
-reg  [15:0] next_scan_pos;
+reg  [17:0] next_scan_pos;
 
 wire        type_is_basic = (prog_type == 8'h00);
 
@@ -79,7 +79,7 @@ always @(posedge clk_sys) begin
 		state         <= T_IDLE;
 		active        <= 1'b0;
 		ram_we        <= 1'b0;
-		next_scan_pos <= 16'd0;
+		next_scan_pos <= 18'd0;
 		eos           <= 1'b0;
 		name_done     <= 1'b0;
 	end
@@ -87,7 +87,7 @@ always @(posedge clk_sys) begin
 		ram_we <= 1'b0;
 
 		// New F1 load → rewind to start.
-		if (tape_load_pulse) next_scan_pos <= 16'd0;
+		if (tape_load_pulse) next_scan_pos <= 18'd0;
 
 		case (state)
 			T_IDLE: begin
@@ -95,7 +95,7 @@ always @(posedge clk_sys) begin
 					state       <= T_INIT;
 					active      <= 1'b1;
 					cache_addr  <= next_scan_pos;
-					bot_seg     <= 16'd0;
+					bot_seg     <= 18'd0;
 					eos         <= 1'b0;
 					name_done   <= 1'b0;
 				end
@@ -105,14 +105,14 @@ always @(posedge clk_sys) begin
 			// next cycle so tape_data corresponds to mem[next_scan_pos]
 			// when T_SCAN starts running.
 			T_INIT: begin
-				cache_addr <= cache_addr + 16'd1;
+				cache_addr <= cache_addr + 18'd1;
 				state      <= T_SCAN;
 			end
 
 			// Scan for sync marker, then capture header fields by offset.
 			// tape_data at this cycle = mem[cache_addr - 1].
 			T_SCAN: begin
-				cache_addr <= cache_addr + 16'd1;
+				cache_addr <= cache_addr + 18'd1;
 				if (cache_addr > tape_end) begin
 					// Walked off the end without finding a segment — exit
 					// quietly. ROM's autorun path will see whatever stale
@@ -127,15 +127,15 @@ always @(posedge clk_sys) begin
 					end
 				end
 				else begin
-					if (cache_addr - 16'd1 == bot_seg + 16'd2) prog_type            <= tape_data;
-					if (cache_addr - 16'd1 == bot_seg + 16'd3) autorun_byte         <= tape_data;
-					if (cache_addr - 16'd1 == bot_seg + 16'd4) data_end[15:8]       <= tape_data;
-					if (cache_addr - 16'd1 == bot_seg + 16'd5) data_end[7:0]        <= tape_data;
-					if (cache_addr - 16'd1 == bot_seg + 16'd6) data_start[15:8]     <= tape_data;
-					if (cache_addr - 16'd1 == bot_seg + 16'd7) data_start[7:0]      <= tape_data;
+					if (cache_addr - 18'd1 == bot_seg + 18'd2) prog_type            <= tape_data;
+					if (cache_addr - 18'd1 == bot_seg + 18'd3) autorun_byte         <= tape_data;
+					if (cache_addr - 18'd1 == bot_seg + 18'd4) data_end[15:8]       <= tape_data;
+					if (cache_addr - 18'd1 == bot_seg + 18'd5) data_end[7:0]        <= tape_data;
+					if (cache_addr - 18'd1 == bot_seg + 18'd6) data_start[15:8]     <= tape_data;
+					if (cache_addr - 18'd1 == bot_seg + 18'd7) data_start[7:0]      <= tape_data;
 					// Skip filename (null-terminated) — we don't need it
 					// since the ROM's $E651 print uses $027F directly.
-					if (cache_addr - 16'd1 >= bot_seg + 16'd9 && !name_done) begin
+					if (cache_addr - 18'd1 >= bot_seg + 18'd9 && !name_done) begin
 						if (tape_data == 8'h00) begin
 							name_done  <= 1'b1;
 							write_addr <= data_start;
@@ -148,7 +148,7 @@ always @(posedge clk_sys) begin
 			// Stream bytes from cache to main RAM.
 			// On entry: next-cycle tape_data is the first program byte.
 			T_WRITE: begin
-				cache_addr <= cache_addr + 16'd1;
+				cache_addr <= cache_addr + 18'd1;
 				ram_we     <= 1'b1;
 				ram_addr   <= write_addr;
 				ram_data   <= tape_data;

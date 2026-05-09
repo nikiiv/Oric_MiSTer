@@ -433,10 +433,19 @@ wire        r, g, b;
 wire        hs, vs, HBlank, VBlank;
 wire        clk_pix;
 wire        tape_in, tape_out;
+localparam FILE_CACHE_ADDR_WIDTH = 18;
+localparam FILE_CACHE_NUMWORDS   = 196608; // 192 KiB, shared by TAP and SNA loads.
+localparam TAP_CACHE_NUMWORDS    = 163840; // 160 KiB TAP limit.
+localparam [FILE_CACHE_ADDR_WIDTH-1:0] FILE_CACHE_LAST = FILE_CACHE_NUMWORDS - 1;
+localparam [FILE_CACHE_ADDR_WIDTH-1:0] TAP_CACHE_LAST  = TAP_CACHE_NUMWORDS - 1;
+
 wire        tap_byte_consume;
 wire        tap_byte_active;
-wire [15:0] tap_byte_cache_addr;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] tap_byte_cache_addr;
 wire  [7:0] tap_byte_data;
+
+wire        snap_active;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] snap_cache_addr;
 
 wire [15:0] ram_ad;
 wire [15:0] spram_addr;
@@ -665,27 +674,45 @@ assign AUDIO_R = (stereo == 2'b00) ? {1'b0,psg_out+tapeAudio,1'b0} : (stereo == 
 wire casdout;
 wire cas_relay;
 
-reg  [15:0] tape_end;
+reg  [FILE_CACHE_ADDR_WIDTH-1:0] tape_end;
 reg         tape_loaded = 1'b0;
+reg  [FILE_CACHE_ADDR_WIDTH-1:0] snap_end;
 
-wire [15:0] tape_addr;
-wire [7:0]  tape_data;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] tape_addr;
+wire [7:0]  filecache_q;
+wire [7:0]  tape_data = filecache_q;
+wire [7:0]  snap_cache_q = filecache_q;
 
-spram #(.address_width(16)) tapecache (
+wire file_download_active   = ioctl_download && (load_tape || load_sna);
+wire file_download_in_range = load_tape ? (ioctl_addr < TAP_CACHE_NUMWORDS) :
+                              load_sna  ? (ioctl_addr < FILE_CACHE_NUMWORDS) :
+                                          1'b0;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] file_download_last =
+  load_tape ? TAP_CACHE_LAST : FILE_CACHE_LAST;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] file_download_addr =
+  file_download_in_range ? ioctl_addr[FILE_CACHE_ADDR_WIDTH-1:0] : file_download_last;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] file_selected_addr =
+  file_download_active ? file_download_addr :
+  snap_active          ? snap_cache_addr :
+  tap_active           ? tap_cache_addr :
+  tap_byte_active      ? tap_byte_cache_addr :
+                         tape_addr;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] filecache_addr =
+  (file_selected_addr > FILE_CACHE_LAST) ? FILE_CACHE_LAST : file_selected_addr;
+
+spram #(.address_width(FILE_CACHE_ADDR_WIDTH), .numwords(FILE_CACHE_NUMWORDS)) filecache (
   .clock(clk_sys),
 
-  .address((ioctl_download && load_tape) ? ioctl_addr :
-           tap_active                    ? tap_cache_addr :
-           tap_byte_active               ? tap_byte_cache_addr :
-                                           tape_addr),
+  .address(filecache_addr),
   .data(ioctl_dout),
-  .wren(ioctl_wr && load_tape),
-  .q(tape_data)
+  .wren(ioctl_wr && (load_tape || load_sna) && file_download_in_range),
+  .q(filecache_q)
 );
 
 
 always @(posedge clk_sys) begin
- if (load_tape) tape_end <= ioctl_addr[15:0];
+	if (load_tape && ioctl_download) tape_end <= file_download_addr;
+	if (load_sna && ioctl_download) snap_end <= file_download_addr;
 end
 
 always @(posedge clk_sys) begin
@@ -708,7 +735,7 @@ cassette cassette (
 
 // ---- Multi-stage TAP segment loader (rtl/tap_segment_loader.v) ----
 // Triggered by the patched BASIC CLOAD doing `LDA #$01 / STA $C000`.
-// Pulls one segment per trigger from tapecache into RAM, populates
+// Pulls one segment per trigger from the shared file cache into RAM, populates
 // the BASIC-state side effects (start/end pointers, autorun, type,
 // TXTTAB/TXTEND), then releases CPU. Status-row paint at $BB80 is
 // left to the ROM ($E651) so HIRES programs that use that area as
@@ -718,7 +745,7 @@ wire        tap_active;
 wire [15:0] tap_ram_addr;
 wire  [7:0] tap_ram_data;
 wire        tap_ram_we;
-wire [15:0] tap_cache_addr;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] tap_cache_addr;
 tap_segment_loader tap_seg (
 	.clk_sys        (clk_sys),
 	.reset          (reset),
@@ -768,9 +795,8 @@ end
 
 // ---- Snapshot LOAD .sna (rtl/snap_loader.v) ----
 // Block format and field-level mapping in docs/sna_support.md.
-// The snapcache spram lives inside the module; this top level only
-// supplies ioctl signals and consumes RAM/CPU/AY/VIA restore outputs.
-wire        snap_active;
+// The shared filecache spram is owned by this top level; snap_loader
+// reads it while applying RAM/CPU/AY/VIA restore outputs.
 wire [15:0] snap_ram_addr;
 wire  [7:0] snap_ram_data;
 wire        snap_ram_we;
@@ -801,10 +827,10 @@ snap_loader snap_loader (
 	.reset           (reset),
 	.ioctl_download  (ioctl_download),
 	.ioctl_downlD    (ioctl_downlD),
-	.ioctl_wr        (ioctl_wr),
-	.ioctl_addr      (ioctl_addr),
-	.ioctl_dout      (ioctl_dout),
 	.load_sna        (load_sna),
+	.snap_end        (snap_end),
+	.snap_cache_addr (snap_cache_addr),
+	.snap_cache_q    (snap_cache_q),
 	.active          (snap_active),
 	.ram_addr        (snap_ram_addr),
 	.ram_data        (snap_ram_data),

@@ -3,12 +3,18 @@
 The core supports three tape-loading paths, selected by the **Tape
 Load** P1 menu option:
 
+The selected TAP is buffered in the shared FPGA file cache also used
+for SNA uploads. TAP uploads are clamped to 160 KiB, sized for the
+largest known Oric TAP in this repository (`petscii.tap`, about
+146 KiB). Larger TAP uploads are clamped at the cache limit instead of
+wrapping and corrupting earlier bytes.
+
 ## Autoload TAP = On (default)
 
 After an F1 `.tap` selection finishes, the core resets the Oric, waits
 for BASIC to reach the `READY` prompt, then injects `CLOAD""` followed
 by Return through the normal keyboard path. The selected tape remains
-buffered in `tapecache` across that reset.
+buffered in the shared file cache across that reset.
 
 Autoload only starts the command. The actual loading path is still
 selected by the existing tape settings:
@@ -16,7 +22,8 @@ selected by the existing tape settings:
 - **Ultra** patches CLOAD and triggers the instant
   `tap_segment_loader.v` path.
 - **Fast** patches the ROM cassette sync/byte routines and feeds TAP
-  bytes from `tapecache` through the patched `GETTAPEBYTE` routine.
+  bytes from the shared file cache through the patched `GETTAPEBYTE`
+  routine.
 - **Off** leaves the ROM untouched; the stock ROM reads the cassette
   audio stream from the buffered TAP file.
 
@@ -41,9 +48,8 @@ decisions, while only replacing the slow cassette byte acquisition.
 ## Tape Load = Ultra
 
 The patched ROM at `$E85F-$E8BB` triggers `tap_segment_loader.v`,
-which copies one segment per `CLOAD` from the in-FPGA `tapecache`
-spram directly into RAM. Loads finish in milliseconds and audio
-isn't used.
+which copies one segment per `CLOAD` from the shared FPGA file cache
+directly into RAM. Loads finish in milliseconds and audio isn't used.
 
 Ultra remains available for instant segment loading, but Fast is more
 compatible because the original ROM still performs the tape-load state
