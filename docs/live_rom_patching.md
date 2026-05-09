@@ -19,7 +19,7 @@ Three reasons we landed on this approach:
    from `rtl/rom/BASIC11A.vhdl` — no ioctl stream exists for it.
    A read-side override sits between the ROM and the CPU regardless
    of the source, so the same patch works for the built-in Atmos,
-   built-in Oric 1, and any loadable BIOS.
+   built-in Oric 1, built-in Pravetz 8D, and any loadable BIOS.
 3. **Scales for free.** A 200-byte patch is the same wiring as a
    5-byte one. The patch ROM is just a `case` table and the
    override is one address-range comparator on the bus.
@@ -40,7 +40,7 @@ Three reasons we landed on this approach:
               │                                                        │
    cpu_ad ──► │  read mux:                                             │
               │    IF patch_active='1' THEN cpu_di <= patch_data;      │
-              │    ELSIF ... (built-in Atmos / Oric 1 / loadable BIOS) │
+              │ ELSIF ... (built-in Atmos / Oric 1 / Pravetz / BIOS) │
               │    ELSIF ... (RAM / VIA / disk)                        │
               │                                                        │
               └────────────────────────────────────────────────────────┘

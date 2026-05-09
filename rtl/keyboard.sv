@@ -9,6 +9,7 @@ module keyboard
 	input          key_extended, // extended code
 	input          key_strobe,   // strobe
 	input  [7:0]   key_code,     // key scan code
+	input          pravetz_layout,
 	input  [2:0]	col,         // column index used by the mutiplexer
 	input [7:0] row_mask,        // row mask as prepared by the PSG
 	output reg kbd_int,
@@ -76,9 +77,18 @@ reg swsq = 1'b0; 	// '
 reg swsc = 1'b0;		// ;
 reg swesc = 1'b0;	// escape
 reg swctl = 1'b0;	// left ctrl
-	
+reg sw2_pravetz_quote = 1'b0;
+reg swls_pravetz_quote = 1'b0;
+
+wire sw2_matrix = sw2 | (pravetz_layout & sw2_pravetz_quote);
+wire swls_matrix = swls | (pravetz_layout & swls_pravetz_quote);
+
 always @(posedge clk_sys) begin
-	if(key_strobe) begin
+	if(reset) begin
+		sw2_pravetz_quote <= 1'b0;
+		swls_pravetz_quote <= 1'b0;
+	end
+	else if(key_strobe) begin
 		case(key_code)
 			'h045: sw0      			<= key_pressed; // 0
 			'h016: sw1       			<= key_pressed; // 1
@@ -136,7 +146,20 @@ always @(posedge clk_sys) begin
 			'h054: swlsb				<= key_pressed; // left sq bracket
 			'h05d: swbs					<= key_pressed; // back slash h05d
 			'h04e: swdsh				<= key_pressed; // dash
-			'h052: swsq					<= key_pressed; // single quote
+			'h052: begin
+				if (pravetz_layout) begin
+					sw2_pravetz_quote <= key_pressed;
+					swls_pravetz_quote <= key_pressed;
+					swsq <= 1'b0;
+				end
+				else begin
+					swsq <= key_pressed; // single quote
+					if (!key_pressed) begin
+						sw2_pravetz_quote <= 1'b0;
+						swls_pravetz_quote <= 1'b0;
+					end
+				end
+			end
 			'h04c: swsc					<= key_pressed; // semi colon
 			'h076: swesc				<= key_pressed; // escape
 			'h014: swctl				<= key_pressed; // left control
@@ -179,7 +202,7 @@ always @(posedge clk_sys) begin
 			kbd_int <= (swR   & ~row_mask[7])
 			         | (swD   & ~row_mask[6])
 			         | (swL   & ~row_mask[5])
-			         | (swls  & ~row_mask[4])
+			         | (swls_matrix & ~row_mask[4])
 			         | (swU   & ~row_mask[3])
 			         | (swdot & ~row_mask[2])
 			         | (swcom & ~row_mask[1])
@@ -195,7 +218,7 @@ always @(posedge clk_sys) begin
 		end
 		else if (col == 2) begin
 			kbd_int <= (swc   & ~row_mask[7])
-			         | (sw2   & ~row_mask[6])
+			         | (sw2_matrix & ~row_mask[6])
 			         | (swz   & ~row_mask[5])
 			         | (swctl & ~row_mask[4])
 			         | (sw4   & ~row_mask[3])

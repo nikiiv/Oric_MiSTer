@@ -245,8 +245,8 @@ localparam CONF_STR = {
 	"P1O[16:15],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"P1-;",
 	"P1O[9:8],Audio,Stereo,ABC (West Europe),ACB (East Europe);",
-	"H1O[4:3],ROM,Oric Atmos,Oric 1;",
-	"h1O[4:3],ROM,Oric Atmos,Oric 1,Loadable Bios;",
+	"H1O[4:3],ROM,Oric Atmos,Oric 1,Pravetz 8D;",
+	"h1O[4:3],ROM,Oric Atmos,Oric 1,Pravetz 8D,Loadable Bios;",
 	
 	"-;",
 	"R0,Reset & Apply;",
@@ -400,12 +400,14 @@ wire [10:0] tap_autorun_ps2_key;
 wire [10:0] kbd_ps2_key = tap_autorun_active ? tap_autorun_ps2_key : ps2_key;
 wire        hps_key_strobe;
 wire        tap_autorun_key_strobe;
+wire        pravetz_layout;
 
 tap_autorun_keys tap_autorun_keys (
 	.clk_sys    (clk_sys),
 	.hard_reset (manual_reset_req),
 	.start      (tap_load_pulse && tap_autorun_en),
 	.oric_reset (reset),
+	.pravetz_layout (pravetz_layout),
 	.reset_req  (tap_autorun_reset_req),
 	.active     (tap_autorun_active),
 	.ps2_key    (tap_autorun_ps2_key)
@@ -498,6 +500,7 @@ oricatmos oricatmos
 	.key_code         (kbd_ps2_key[7:0]),
 	.key_extended     (kbd_ps2_key[8]),
 	.key_strobe       (key_strobe),
+	.pravetz_layout   (pravetz_layout),
 	.PSG_OUT_A        (psg_a),
 	.PSG_OUT_B        (psg_b),
 	.PSG_OUT_C        (psg_c),
@@ -529,7 +532,7 @@ oricatmos oricatmos
 	.phi2             (),
 	.pll_locked       (locked),
 	.disk_enable      ((!status[6:5]) ? ~fdd_ready : status[5]),
-	.rom              ({rom[1] & bios_loaded, rom[0]}),
+	.rom              (rom_sel),
 	.bios_addr        (bios_addr),
 	.bios_din         (bios_din),
 
@@ -586,6 +589,8 @@ oricatmos oricatmos
 
 reg [1:0] rom = 0;
 always @(posedge clk_sys) if(reset) rom <= status[4:3];
+wire [1:0] rom_sel = (rom == 2'd3 && !bios_loaded) ? 2'd0 : rom;
+assign pravetz_layout = (rom_sel == 2'd2);
 
 reg fdd_ready = 0;
 always @(posedge clk_sys) if(img_mounted) fdd_ready <= |img_size;

@@ -49,6 +49,7 @@ ENTITY oricatmos IS
 		key_extended : IN STD_LOGIC;
 		key_code : IN STD_LOGIC_VECTOR(7 DOWNTO 0);
 		key_strobe : IN STD_LOGIC;
+		pravetz_layout : IN STD_LOGIC := '0';
 		K7_TAPEIN : IN STD_LOGIC;
 		K7_TAPEOUT : OUT STD_LOGIC;
 		K7_REMOTE : OUT STD_LOGIC;
@@ -214,6 +215,7 @@ ARCHITECTURE RTL OF oricatmos IS
 	SIGNAL ENA_1MHZ : STD_LOGIC;
 	SIGNAL ROM_ATMOS_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
 	SIGNAL ROM_1_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL ROM_PRAVETZ_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
 	SIGNAL ROM_MD_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
 
 	--- Printer port
@@ -249,6 +251,7 @@ ARCHITECTURE RTL OF oricatmos IS
 			key_extended : IN STD_LOGIC;
 			key_strobe : IN STD_LOGIC;
 			key_code : IN STD_LOGIC_VECTOR(7 DOWNTO 0);
+			pravetz_layout : IN STD_LOGIC;
 			col : IN STD_LOGIC_VECTOR(2 DOWNTO 0);
 			row_mask : IN STD_LOGIC_VECTOR(7 DOWNTO 0);
 			kbd_int : OUT STD_LOGIC;
@@ -347,6 +350,13 @@ BEGIN
 			clk => CLK_IN,
 			addr => cpu_ad(13 DOWNTO 0),
 			data => ROM_1_DO
+		);
+
+	inst_rom_pravetz : ENTITY work.PRAVETZ8D -- Pravetz 8D ROM
+		PORT MAP(
+			clk => CLK_IN,
+			addr => cpu_ad(13 DOWNTO 0),
+			data => ROM_PRAVETZ_DO
 		);
 
 	inst_rom2 : ENTITY work.ORICDOS06 -- Microdisc ROM
@@ -477,6 +487,7 @@ BEGIN
 		key_extended => key_extended,
 		key_strobe => key_strobe,
 		key_code => key_code,
+		pravetz_layout => pravetz_layout,
 		col => via_pb_out (2 DOWNTO 0),
 		kbd_int => kbd_int,
 		row_mask => psg_ioa_out,
@@ -613,8 +624,11 @@ BEGIN
 			-- ROM Oric 1	
 		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND ula_CSIOn = '1' AND ula_CSROMn = '0' AND cont_MAPn = '1' AND cont_ROMDISn = '1' AND rom = "01" THEN
 			cpu_di <= ROM_1_DO;
-			-- Loadable ROM
+			-- ROM Pravetz 8D
 		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND ula_CSIOn = '1' AND ula_CSROMn = '0' AND cont_MAPn = '1' AND cont_ROMDISn = '1' AND rom = "10" THEN
+			cpu_di <= ROM_PRAVETZ_DO;
+			-- Loadable ROM
+		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND ula_CSIOn = '1' AND ula_CSROMn = '0' AND cont_MAPn = '1' AND cont_ROMDISn = '1' AND rom = "11" THEN
 			cpu_di <= bios_din;
 			--ROM Microdisc
 		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND cont_ECE = '0' AND cont_ROMDISn = '0' AND cont_MAPn = '1' THEN

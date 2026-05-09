@@ -15,6 +15,7 @@ module tap_autorun_keys #(
 	input             hard_reset,
 	input             start,
 	input             oric_reset,
+	input             pravetz_layout,
 
 	output reg        reset_req,
 	output reg        active,
@@ -34,6 +35,7 @@ localparam [7:0] SC_C      = 8'h21,
                  SC_O      = 8'h44,
                  SC_A      = 8'h1C,
                  SC_D      = 8'h23,
+                 SC_2      = 8'h1E,
                  SC_SHIFT  = 8'h12,
                  SC_QUOTE  = 8'h52,
                  SC_RETURN = 8'h5A;
@@ -44,6 +46,7 @@ reg [31:0] wait_cnt;
 
 reg        event_pressed;
 reg [7:0]  event_code;
+wire [7:0] quote_code = pravetz_layout ? SC_2 : SC_QUOTE;
 
 always @(*) begin
 	event_pressed = 1'b0;
@@ -60,10 +63,10 @@ always @(*) begin
 		5'd8:  begin event_pressed = 1'b1; event_code = SC_D;      end
 		5'd9:  begin event_pressed = 1'b0; event_code = SC_D;      end
 		5'd10: begin event_pressed = 1'b1; event_code = SC_SHIFT;  end
-		5'd11: begin event_pressed = 1'b1; event_code = SC_QUOTE;  end
-		5'd12: begin event_pressed = 1'b0; event_code = SC_QUOTE;  end
-		5'd13: begin event_pressed = 1'b1; event_code = SC_QUOTE;  end
-		5'd14: begin event_pressed = 1'b0; event_code = SC_QUOTE;  end
+		5'd11: begin event_pressed = 1'b1; event_code = quote_code; end
+		5'd12: begin event_pressed = 1'b0; event_code = quote_code; end
+		5'd13: begin event_pressed = 1'b1; event_code = quote_code; end
+		5'd14: begin event_pressed = 1'b0; event_code = quote_code; end
 		5'd15: begin event_pressed = 1'b0; event_code = SC_SHIFT;  end
 		5'd16: begin event_pressed = 1'b1; event_code = SC_RETURN; end
 		5'd17: begin event_pressed = 1'b0; event_code = SC_RETURN; end

@@ -18,6 +18,9 @@ High-value docs:
   and audio cassette fallback.
 - `docs/sna_support.md` - snapshot loader format, restored state, and
   verification notes.
+- `docs/oric_memory_map.md` - full Oric Atmos memory map (pages 0..4
+  address-by-address, page 3 I/O / VIA / PSG / disk-controller
+  windows, CPU vectors, Pravetz `$320` behaviour, hardware overview).
 - `docs/oric_to_core_comm.md` - runtime communication patterns between
   the 6502 and FPGA core.
 - `docs/live_rom_patching.md` - read-side ROM patching used by Smart

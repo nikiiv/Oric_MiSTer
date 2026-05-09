@@ -146,7 +146,8 @@ ELSIF ... (existing ROM/IO/RAM decode chain)
 
 Whatever drives `patch_active`/`patch_data` (typically a synth-time
 patch table indexed by the ROM offset) wins over all three ROM
-sources — built-in Atmos, built-in Oric 1, and the loadable BIOS.
+sources — built-in Atmos, built-in Oric 1, built-in Pravetz 8D, and
+the loadable BIOS.
 
 This is documented in detail in `docs/live_rom_patching.md`. The
 short version: gate it on a status bit, build a `case` table for

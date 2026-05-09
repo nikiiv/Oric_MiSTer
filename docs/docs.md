@@ -35,6 +35,13 @@ communication between the emulated 6502 and the FPGA core.
 
 ## Oric reference material
 
+- `oric_memory_map.md` is the consolidated memory map: pages 0..4
+  address-by-address (BASIC pointers, OS variables, IRQ/NMI vectors),
+  the full page-3 I/O map (VIA 6522 register layout, AY-3-8912 access
+  via the VIA, Microdisc / Jasmin / Pravetz / ACIA / RTC / lightpen
+  windows), what `CALL #320` actually does on each variant, and a
+  hardware overview of how the 6502, ULA, VIA, PSG, keyboard, and
+  cassette interact.
 - `Oric Rom.md` is a converted Atmos 1.1b ROM disassembly with anchors and
   cross-references. It is the searchable source for BASIC routines, tape
   routines such as CLOAD/CSAVE, keyboard, graphics, sound, reset, IRQ, and ROM
