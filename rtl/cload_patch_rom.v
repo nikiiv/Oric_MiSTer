@@ -95,8 +95,9 @@ always @(*) begin
 	end
 	else if (fast_enable && in_fast_sync) begin
 		case (rom_addr)
-			// $E735: bypass cassette pulse sync. The ROM's TAPESYNC
-			// caller still reads bytes until it sees the $24 marker.
+			// $E735: bypass cassette pulse sync. The streamer performs
+			// byte-level leader alignment, then the ROM caller consumes
+			// bytes until it sees the $24 marker.
 			14'h2735: data_r = 8'hA2; // LDX #$00
 			14'h2736: data_r = 8'h00;
 			14'h2737: data_r = 8'h60; // RTS

@@ -141,11 +141,17 @@ ENTITY oricatmos IS
 		c000_we         : OUT STD_LOGIC;
 		c000_data       : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
 
+		-- CLOAD filename snoop: pulses when the ROM argument parser
+		-- writes the first non-zero requested filename byte to $027F.
+		named_cload_we  : OUT STD_LOGIC;
+
 		-- Fast TAP byte streamer. The patched GETTAPEBYTE routine
 		-- embeds the current TAP byte as an immediate operand at
 		-- $E6CE; this strobe advances the prefetcher after that byte
-		-- has been fetched.
+		-- has been fetched. The patched SYNCTAPE entry at $E735
+		-- notifies the streamer before the ROM starts raw byte reads.
 		tape_byte_enable : IN  STD_LOGIC := '0';
+		tap_sync_request : OUT STD_LOGIC;
 		tap_byte_consume : OUT STD_LOGIC
 	);
 END;
@@ -588,6 +594,19 @@ BEGIN
 	                AND cpu_ad(15 DOWNTO 0) = X"C000"
 	           ELSE '0';
 	c000_data <= cpu_do;
+	named_cload_we <= '1' WHEN ula_phi2 = '1'
+	                       AND cpu_rw = '0'
+	                       AND cpu_do /= X"00"
+	                       AND cpu_ad(15 DOWNTO 0) = X"027F"
+	                  ELSE '0';
+	tap_sync_request <= '1' WHEN ula_phi2 = '1'
+	                          AND cpu_rw = '1'
+	                          AND tape_byte_enable = '1'
+	                          AND ula_CSROMn = '0'
+	                          AND cont_MAPn = '1'
+	                          AND cont_ROMDISn = '1'
+	                          AND cpu_ad(13 DOWNTO 0) = STD_LOGIC_VECTOR(TO_UNSIGNED(16#2735#, 14))
+	                     ELSE '0';
 	tap_byte_consume <= '1' WHEN ula_phi2 = '1'
 	                         AND cpu_rw = '1'
 	                         AND tape_byte_enable = '1'

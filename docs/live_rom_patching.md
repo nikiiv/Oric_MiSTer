@@ -138,10 +138,10 @@ writing 200-byte 6502 routines, and the patched code is just a
 2-3 instruction handoff.
 
 Fast tape loading uses a different read-side-only pattern: `$E735`
-returns immediately and `$E6C9` returns the next TAP byte through a
-patched `LDA #imm`, with `tap_byte_streamer.v` advancing when the
-CPU fetches that immediate operand. It does not use a CPU-visible
-mailbox.
+requests byte-level TAP leader alignment and `$E6C9` returns the next
+TAP byte through a patched `LDA #imm`, with `tap_byte_streamer.v`
+advancing only when the CPU fetches that immediate operand. It does
+not use a CPU-visible mailbox.
 
 Avoid using a `$02xx` system-RAM address as the mailbox — game
 code may write there for its own purposes and spuriously trigger

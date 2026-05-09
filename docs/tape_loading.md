@@ -32,8 +32,10 @@ selected by the existing tape settings:
 Fast mode keeps the ROM's byte-by-byte load flow, but replaces the
 slow cassette timing routines:
 
-- `$E735` (`SYNCTAPE`) returns immediately; the ROM's caller still
-  reads bytes until it sees the TAP `$24` marker.
+- `$E735` (`SYNCTAPE`) performs a byte-level TAP leader seek, looking
+  for at least two `$16` leader bytes followed by the `$24` marker.
+  It leaves the byte pointer at the leader so the ROM's caller still
+  consumes the leader and marker through `$E6C9`.
 - `$E6C9` (`GETTAPEBYTE`) preserves X/Y and returns the next TAP
   byte from `tap_byte_streamer.v` via a patched `LDA #imm`.
 
@@ -44,6 +46,51 @@ own VIA/timer cassette decoder.
 Fast is the preferred default: it keeps the ROM in charge of parsing
 headers, filenames, BASIC setup, machine-code loading, and autorun
 decisions, while only replacing the slow cassette byte acquisition.
+
+The byte-level leader seek exists because Fast mode bypasses the
+ROM's original bit-level cassette synchronizer. The stock ROM first
+aligns on tape leader bits, then its TAPESYNC caller scans bytes for
+the `$24` header marker. If Fast mode simply returned from `$E735`,
+named loads that reject an earlier segment could resume scanning from
+inside that segment's payload and mistake a payload `$24` for a header.
+Seeking to a real TAP leader run before returning from `$E735` restores
+the useful effect of ROM sync while keeping the byte stream itself raw.
+
+Fast mode tracks its position as a byte offset into the cached TAP
+file, not as a segment counter. New TAP loads, Reset/Apply, and
+autoload resets arm a one-shot raw rewind: the next ROM tape-sync call
+starts its leader seek from offset 0 and lets the ROM consume the TAP
+leader, marker, header, filename, and payload itself. After that,
+unnamed loads continue sequentially from the byte after the previous
+loaded or skipped segment.
+
+Repository TAPs have been observed with two, three, and four `$16`
+leader bytes before `$24`, so the Fast SYNCTAPE seek accepts two or
+more leader bytes rather than requiring the ROM's nominal three-byte
+post-sync check.
+
+### Named CLOAD Rewind
+
+The **Named CLOAD Rewind** P1 setting controls where Fast mode starts
+searching when BASIC executes a named load:
+
+- **On** (default): when the ROM stores a non-empty requested filename
+  for `CLOAD"NAME"`, the Fast byte streamer rewinds to the start of the
+  cached TAP at the next ROM tape-sync call. The ROM then performs
+  normal filename matching; non-matching segments are skipped by the
+  next byte-level leader seek.
+- **Off**: named loads continue from the current stream position.
+
+Unnamed `CLOAD""` is always sequential: each call continues from the
+byte after the last loaded or skipped segment.
+
+Regression note: `PROG.tap` should autoload `PROG-A` first; that
+program then issues `CLOAD"PROG-C"`, so the expected final result is
+`PROG C`, not `PROG B`.
+
+Regression note: `Xenon3.tap` should load `G1`, then find `G2` without
+printing garbage on the status line. That case specifically exercises
+rewind + name mismatch + later segment search.
 
 ## Tape Load = Ultra
 
@@ -100,5 +147,7 @@ hardware — not the ~30s I had estimated earlier.
 3. To use the old manual flow, set P1 → **Autoload TAP** to Off, F1 to
    load the `.tap` file, then type `CLOAD""` at the BASIC `READY`
    prompt.
-4. With Tape Load Off + Tape Audio set to Low/High you'll hear
+4. In Fast mode, leave **Named CLOAD Rewind** On if you want
+   `CLOAD"NAME"` to search from the first TAP segment.
+5. With Tape Load Off + Tape Audio set to Low/High you'll hear
    the audio waveform during the load.

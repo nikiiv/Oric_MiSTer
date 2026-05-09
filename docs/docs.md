@@ -56,14 +56,15 @@ communication between the emulated 6502 and the FPGA core.
 
 - Tape Load = Fast is the default and preferred tape path. It leaves the ROM's
   tape-load flow in charge while replacing cassette byte acquisition with a TAP
-  byte feeder.
+  byte feeder and byte-level TAP leader alignment at patched SYNCTAPE.
 - Tape Load = Ultra patches the ROM around CLOAD, snoops a write to `$C000`,
   then lets `tap_segment_loader.v` copy the next TAP segment from `tapecache`
   into RAM and update BASIC state where needed.
-- Tape Load = Fast patches the ROM cassette sync/byte routines and feeds TAP
-  bytes through the patched `GETTAPEBYTE` immediate operand, covering custom
-  loaders that still call the ROM tape routines. Tape Load = Off preserves
-  original VIA cassette behavior.
+- Tape Load = Fast patches the ROM cassette sync/byte routines, aligns to TAP
+  leader runs before `$24`, and feeds raw TAP bytes through the patched
+  `GETTAPEBYTE` immediate operand. This covers custom loaders that still call
+  the ROM tape routines. Tape Load = Off preserves original VIA cassette
+  behavior.
 - Snapshot LOAD is implemented for RAM, CPU registers, AY registers/current
   register, VIA registers, VIA timers, active flags, and IFR source flags.
   Snapshot SAVE is not implemented.

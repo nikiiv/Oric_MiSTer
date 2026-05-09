@@ -237,6 +237,7 @@ localparam CONF_STR = {
 	"P1O[52],Tape Input,File,ADC;",
 	"P1O[59:58],Tape Load,Fast,Ultra,Off;",
 	"P1O[57],Autoload TAP,On,Off;",
+	"P1O[60],Named CLOAD Rewind,On,Off;",
 	"P1-;",
 	"P1O[55:54],Joystick Adapter,None,PASE,IJK;",
 	"P1-;",
@@ -263,6 +264,7 @@ wire [1:0] tape_load_mode   = status[59:58];
 wire       tape_mode_fast   = (tape_load_mode == 2'd0);
 wire       tape_mode_ultra  = (tape_load_mode == 2'd1);
 wire       tape_mode_off    = (tape_load_mode >= 2'd2);
+wire       named_cload_rewind_en = ~status[60]; // menu shows On (default) / Off
 
 ///////////////////////////////////////////////////
 
@@ -412,6 +414,15 @@ tap_autorun_keys tap_autorun_keys (
 	.active     (tap_autorun_active),
 	.ps2_key    (tap_autorun_ps2_key)
 );
+
+reg  tap_start_rewind = 1'b0;
+wire tap_start_rewind_ack;
+always @(posedge clk_sys) begin
+	if (tap_load_pulse || ((manual_reset_req || tap_autorun_reset_req) && tape_loaded))
+		tap_start_rewind <= 1'b1;
+	else if (tap_start_rewind_ack)
+		tap_start_rewind <= 1'b0;
+end
 
 wire key_strobe = tap_autorun_active ? tap_autorun_key_strobe : hps_key_strobe;
 reg old_keystb = 0;
@@ -581,7 +592,9 @@ oricatmos oricatmos
 	.patch_data       (cload_patch_data),
 	.c000_we          (c000_we),
 	.c000_data        (c000_data),
+	.named_cload_we   (named_cload_we),
 	.tape_byte_enable (tape_mode_fast),
+	.tap_sync_request (tap_sync_request),
 	.tap_byte_consume (tap_byte_consume)
 );
 
@@ -769,16 +782,22 @@ tap_segment_loader tap_seg (
 // Used by Tape Load = Fast. The patched ROM GETTAPEBYTE routine
 // embeds tap_byte_data as an immediate operand; each operand fetch
 // consumes one byte and prefetches the next one.
+wire named_cload_rewind = named_cload_we && tape_mode_fast &&
+                          tape_loaded && named_cload_rewind_en;
 tap_byte_streamer tap_byte_streamer (
 	.clk_sys        (clk_sys),
 	.reset          (reset),
 	.consume        (tap_byte_consume && tape_mode_fast && tape_loaded),
+	.sync_request   (tap_sync_request && tape_mode_fast && tape_loaded),
+	.named_rewind   (named_cload_rewind),
+	.start_rewind   (tap_start_rewind && tape_mode_fast && tape_loaded),
 	.tape_load_pulse(tap_load_pulse),
 	.rewind         (tapeRewind),
 	.tape_end       (tape_end),
 	.tape_data      (tape_data),
 	.cache_addr     (tap_byte_cache_addr),
 	.active         (tap_byte_active),
+	.start_rewind_ack(tap_start_rewind_ack),
 	.byte_data      (tap_byte_data)
 );
 
@@ -789,6 +808,8 @@ tap_byte_streamer tap_byte_streamer (
 // LED below (OR'd with the existing activity sources).
 wire        c000_we;
 wire  [7:0] c000_data;
+wire        named_cload_we;
+wire        tap_sync_request;
 reg         led_user_pokeable = 1'b0;
 always @(posedge clk_sys) begin
 	if (reset) led_user_pokeable <= 1'b0;

@@ -80,9 +80,10 @@ The `$C000` mailbox is dual-use:
   trigger a tape-segment load via `tap_segment_loader.v`.
 
 Fast tape loading does not use a CPU-visible mailbox. It patches
-`$E6C9` so the next TAP byte from `tap_byte_streamer.v` appears as
-the immediate operand of `LDA #imm`, then advances the prefetcher
-when the CPU fetches that operand.
+`$E735` to request byte-level TAP leader alignment and `$E6C9` so
+the next TAP byte from `tap_byte_streamer.v` appears as the immediate
+operand of `LDA #imm`, then advances the prefetcher when the CPU
+fetches that operand.
 
 ## Pattern B — core → 6502: halt + paint via spram bus
 
