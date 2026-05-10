@@ -41,3 +41,4 @@ c5_pin_model_dump.txt
 vhdl_ls.toml
 temp_files/
 mister_screenshots/
+__pycache__/
