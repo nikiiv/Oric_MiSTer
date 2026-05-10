@@ -1,62 +1,157 @@
 ---
 name: mister-remote
-description: Drive the MiSTer FPGA over its mrext Remote HTTP API (default mister.local:8182). Use when the user asks to launch a core or game on the MiSTer, send keystrokes / press keys, take or download a screenshot from the MiSTer, reset the running core, or reboot the MiSTer. Wraps the wizzomafizzo/mrext remote API.
+description: Drive a MiSTer FPGA over its mrext Remote HTTP API (default mister.local:8182). Use when the user asks to launch a core/game on the MiSTer, send keystrokes, take or download a screenshot, reset the running core, reboot the MiSTer, browse files on the device, search the games index, manage wallpapers, control the music player, run scripts, or read/write MiSTer.ini settings. Wraps the wizzomafizzo/mrext remote API.
 ---
 
 # mister-remote
 
-Wrapper around the [wizzomafizzo/mrext](https://github.com/wizzomafizzo/mrext) Remote HTTP API. The MiSTer must be running the Remote service (default port `8182`). All commands go through one helper script.
+Wrapper around the [wizzomafizzo/mrext](https://github.com/wizzomafizzo/mrext) Remote HTTP API. The MiSTer must be running the Remote service (default port `8182`). All operations go through one helper script.
 
 ## When to use
 
-Trigger phrases that should invoke this skill:
+Trigger phrases:
 
 - "launch the Oric core / launch system X on the mister"
 - "launch this game / load this disk on the mister"
 - "press menu / osd / arrow / reset on the mister"
 - "send these keystrokes to the mister"
-- "take a screenshot from the mister" / "screenshot the mister core"
-- "download the latest screenshot"
+- "take a screenshot from the mister" / "download the latest screenshot"
 - "reset the (mister) core"
-- "reboot the mister" / "restart the mister"
+- "reboot the mister"
+- "list / browse cores in /media/fat/..."
+- "search the mister games index for X"
+- "what's the active mister wallpaper?" / "set wallpaper Y"
+- "play / stop / next mister music"
+- "list / run mister scripts"
+- "read / edit MiSTer.ini" / "switch active INI"
+- "list peer mister devices"
 
-Do **not** use this for source-level actions (compile, deploy `.rbf`) — those still go through `tools/oric-build`.
+Do **not** use for source-level actions (compile, deploy `.rbf`) — those go through `tools/oric-build`.
 
 ## Default config
 
 - Host: `mister.local` (override with `--host` or env `MISTER_HOST`)
 - Port: `8182` (override with `--port` or env `MISTER_PORT`)
-- Timeout: 5 s (use higher for `reboot`)
+- Timeout: 5 s (helper auto-extends for `reboot` and `settings-remote-restart`)
 
 ## Helper script
-
-All operations:
 
 ```
 python3 .claude/skills/mister-remote/scripts/mister-remote.py <subcommand> [args]
 ```
 
-| Subcommand | Purpose | Example |
-|---|---|---|
-| `sysinfo` | health/status check | `... sysinfo` |
-| `playing` | currently running game | `... playing` |
-| `systems` | list available systems/cores | `... systems` |
-| `launch-system <id>` | launch a system/core by id (`POST /systems/{id}`) | `... launch-system Oric` |
-| `launch-game <path>` | launch a game by absolute path (`POST /games/launch`) | `... launch-game /media/usb0/games/Oric/dsk/foo.dsk` |
-| `launch <path>` | generic launcher (`POST /launch`) — handles `.rbf`, `.mra`, `.mgl`, game files | `... launch /media/fat/_Aoric/Oric.rbf` |
-| `launch-menu` | `POST /launch/menu` — exit the running core (soft reset to MiSTer menu) | `... launch-menu` |
-| `menu-view <path>` | `POST /menu/view` — list a directory on the device; use to discover cores | `... menu-view /media/fat/_Aoric` |
-| `key <name>` | send one named keystroke | `... key osd` |
-| `key-raw <code>` | send a raw uinput key code | `... key-raw 103` |
-| `keys <name1> <name2> ...` | send a sequence of named keys | `... keys down down confirm` |
-| `reset-core` | reset the running core (alias for `key reset`) | `... reset-core` |
-| `reboot --yes` | reboot the entire MiSTer (requires `--yes`) | `... reboot --yes` |
-| `screenshot` | capture; returns `{filename, core, modified, size}` | `... screenshot` |
-| `screenshot-list` | list all stored screenshots | `... screenshot-list` |
-| `screenshot-get <core> <filename> [--out PATH]` | download one screenshot | `... screenshot-get Oric oric-2026-05-10.png --out /tmp/x.png` |
-| `screenshot-capture-and-download [--out PATH]` | capture + download in one call | `... screenshot-capture-and-download --out /tmp/x.png` |
+JSON-returning commands print pretty JSON on stdout. Errors go to stderr with a non-zero exit code. Destructive commands require `--yes`.
 
-JSON-returning commands print pretty-printed JSON on stdout. Errors go to stderr with a non-zero exit code.
+### System info
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `sysinfo` | `GET /sysinfo` | hostname, ips, dns, version, disks |
+| `generate-mac` | `GET /settings/system/generate-mac` | proposes a fresh MAC address |
+
+### Games
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `playing` | `GET /games/playing` | currently running core/game |
+| `games-search <query> [--system <id>]` | `POST /games/search` | full-text search the indexed corpus |
+| `games-search-systems` | `GET /games/search/systems` | systems with an indexed corpus |
+| `games-index` | `POST /games/index` | rebuild the search index (async) |
+
+### Systems / launching
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `systems` | `GET /systems` | id / category / name (tab-separated) |
+| `launch-system <id>` | `POST /systems/{id}` | boot a core by system id |
+| `launch <path>` | `POST /launch` | generic launcher: `.rbf`, `.mra`, `.mgl`, game files |
+| `launch-game <path>` | `POST /games/launch` | launch a game by absolute path |
+| `launch-menu` | `POST /launch/menu` | exit running core, soft reset to MiSTer menu |
+| `launch-new <gamePath> <folder> <name>` | `POST /launch/new` | create a new launcher file pointing at `gamePath` |
+| `launch-encoded <data>` | `GET /l/{data}` | launch from a base64-url-encoded payload (QR / NFC) |
+
+### File browser (Menu)
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `menu-view <path>` | `POST /menu/view` | list a directory; response items have `path`/`name`/`type`/`extension` |
+| `menu-create <type> <folder> <name>` | `POST /menu/files/create` | create a file / folder |
+| `menu-rename <fromPath> <toPath>` | `POST /menu/files/rename` | rename / move on the device |
+| `menu-delete <path> --yes` | `POST /menu/files/delete` | delete a file (requires `--yes`) |
+
+### Controls (keystrokes)
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `key <name>` | `POST /controls/keyboard/{name}` | one named keystroke (validated client-side) |
+| `key-raw <code>` | `POST /controls/keyboard-raw/{code}` | raw uinput key code |
+| `keys <n1> <n2> ...` | (loop over `key`) | sequence of named keys with `--delay` between |
+| `reset-core` | `POST /controls/keyboard/reset` | reset only the running core (alias for `key reset`) |
+
+### Screenshots
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `screenshot` | `POST /screenshots` | fire-and-forget capture (returns empty stub) |
+| `screenshot-list` | `GET /screenshots` | list all stored screenshots |
+| `screenshot-get <core> <filename> [--out PATH]` | `GET /screenshots/{core}/{filename}` | download one PNG |
+| `screenshot-delete <core> <filename> --yes` | `DELETE /screenshots/{core}/{filename}` | delete one (requires `--yes`) |
+| `screenshot-capture-and-download [--out PATH]` | capture + poll + download | recommended path; see workflow below |
+
+### Wallpapers
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `wallpapers` | `GET /wallpapers` | list available + active + background mode |
+| `wallpapers-clear --yes` | `DELETE /wallpapers` | clear active wallpaper |
+| `wallpapers-get <filename> [--out PATH]` | `GET /wallpapers/{filename}` | download one image |
+| `wallpapers-set <filename>` | `POST /wallpapers/{filename}` | set as active |
+
+### Music player
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `music-status` | `GET /music/status` | running / playback / playlist / track |
+| `music-play` | `POST /music/play` | start playback |
+| `music-stop` | `POST /music/stop` | stop playback |
+| `music-next` | `POST /music/next` | skip to next track |
+| `music-playback <type>` | `POST /music/playback/{type}` | mode: `random` / `loop` / `single` (server-validated) |
+| `music-playlist` | `GET /music/playlist` | list available playlists |
+| `music-playlist-set <name>` | `POST /music/playlist/{name}` | switch active playlist |
+
+### Scripts
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `scripts-list` | `GET /scripts/list` | scripts in `/media/fat/Scripts/` (incl. `canLaunch`) |
+| `scripts-launch <filename>` | `POST /scripts/launch/{filename}` | run a script |
+| `scripts-console` | `POST /scripts/console` | toggle the on-screen script console |
+| `scripts-kill --yes` | `POST /scripts/kill` | kill the running script |
+
+### Settings — INI files
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `settings-inis` | `GET /settings/inis` | list configured INIs and which is active |
+| `settings-inis-set <int>` | `PUT /settings/inis` | switch active INI by id |
+| `settings-ini-get <id>` | `GET /settings/inis/{id}` | read INI as a JSON dict |
+| `settings-ini-set <id> --from-file PATH` | `PUT /settings/inis/{id}` | write a key-value JSON dict (`--from-stdin` also works) |
+| `settings-menu-mode <mode>` | `PUT /settings/core/menu` | set the OSD menu mode |
+
+### Settings — Remote service
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `settings-remote-restart --yes` | `POST /settings/remote/restart` | restart the Remote service (will briefly drop the API) |
+| `settings-remote-log [--out PATH]` | `GET /settings/remote/log` | download the service log |
+| `settings-remote-peers` | `GET /settings/remote/peers` | list known peer devices |
+| `settings-remote-logo [--out PATH]` | `GET /settings/remote/logo` | download the logo asset |
+
+### System lifecycle
+
+| Subcommand | Endpoint | Notes |
+|---|---|---|
+| `reboot --yes` | `POST /settings/system/reboot` | full MiSTer restart (~30 s offline) |
 
 ## Valid keystroke names
 
@@ -73,26 +168,20 @@ toggle_core_dates   console   exit_console
 computer_osd
 ```
 
-Most useful in practice:
-
-- `reset` — reset the running core (the API has no separate reset endpoint; this is it)
-- `osd` — open/close the on-screen display (toggle)
-- `menu` — open the MiSTer main menu
-- `screenshot` — capture via keyboard (equivalent to `POST /screenshots`)
-- `up` / `down` / `left` / `right` / `confirm` / `cancel` — menu navigation
-
-Unknown names are rejected client-side and the helper prints the valid list.
+Most useful: `reset`, `osd`, `menu`, `screenshot`, arrow keys, `confirm`/`cancel`. Unknown names are rejected client-side.
 
 ## Reset semantics
 
 | User says | Use |
 |---|---|
-| "reset the core" / "reset the oric" | `reset-core` (sends `key reset`). Restarts the currently running core only. Non-destructive. |
-| "reboot mister" / "restart the mister" | `reboot --yes`. Full system restart. **Always confirm with the user before running this** — running cores lose state and the device drops off the network for ~30 seconds. |
+| "reset the core" / "reset the oric" | `reset-core`. Restarts only the running core. Non-destructive. |
+| "soft reset to menu" / "exit core" | `launch-menu`. Drops back to the MiSTer main menu without rebooting. |
+| "reboot mister" / "restart the mister" | `reboot --yes`. Full system restart. **Confirm with the user first.** |
+| "restart the remote service" | `settings-remote-restart --yes`. Bounces only the Remote daemon (~5 s API outage). |
 
 ## Screenshot workflow
 
-The capture endpoint (`POST /screenshots`) is fire-and-forget — it returns an empty stub and the file is written asynchronously. The helper handles this by snapshotting the listing, posting the capture, then polling `GET /screenshots` until a new entry appears (timeout: `max(--timeout, 10s)`):
+`POST /screenshots` is fire-and-forget — it returns an empty stub and the file is written asynchronously. `screenshot-capture-and-download` snapshots the listing, posts the capture, then polls `GET /screenshots` until a new entry appears (timeout: `max(--timeout, 10s)`):
 
 ```
 python3 .claude/skills/mister-remote/scripts/mister-remote.py screenshot-capture-and-download
@@ -103,50 +192,55 @@ prints e.g.:
 ```json
 {
   "core": "Oric",
-  "filename": "Oric_20260510_2114.png",
-  "saved_to": "/home/niki/projects/Oric_MiSTer/mister_screenshots/Oric_20260510_2114.png"
+  "filename": "20260510_190406-screen.png",
+  "saved_to": "/home/niki/projects/Oric_MiSTer/mister_screenshots/20260510_190406-screen.png"
 }
 ```
 
-**Default destination:** `./mister_screenshots/<filename>` in the current working directory. The folder is auto-created. The repo `.gitignore`s `mister_screenshots/` so captures don't get committed.
+**Default destination:** `./mister_screenshots/<filename>` in CWD. The folder is auto-created and `mister_screenshots/` is gitignored. Override with `--out /path/file.png` (exact path) or `--out /path/dir/` (existing/trailing-slash dir).
 
-Override with `--out`:
-- `--out /tmp/shot.png` — write to that exact file
-- `--out /tmp/shots/` (trailing slash, or existing dir) — write `<filename>` into that directory
-
-## Discovering cores / browsing the device
+## Discovering content
 
 `menu-view` mirrors the MiSTer file browser. Useful starting points:
 
 - `/media/fat/_Computer` — official Computer cores (Oric, Atari ST, BBC, etc.)
 - `/media/fat/_Aoric` — this repo's dev/test build directory (timestamped + `Oric.rbf`)
 - `/media/fat/_Console`, `/media/fat/_Arcade`, `/media/fat/_Other` — sibling category folders
+- `/media/fat/Scripts` — scripts available to `scripts-launch`
 - `/media/usb0/games/Oric/dsk` — Oric `.dsk` images on USB
 
-Each item in the response carries `name`, `path`, `filename`, `extension`, `type`, `modified`, `size` — pass `path` to `launch` to start it.
+Each item carries `path` / `name` / `filename` / `extension` / `type` / `modified` / `size`. Pass `path` to `launch` to start it.
+
+For text searches, prefer `games-search <query>` if the games index has been built (`games-index` to (re)build).
 
 ## Launching Oric content
 
-Oric `.dsk` images on this MiSTer live at `/media/usb0/games/Oric/dsk/` (on USB, not the SD card). Examples:
+Oric `.dsk` images live at `/media/usb0/games/Oric/dsk/` (USB, not SD). Examples:
 
 ```
 ... launch-game /media/usb0/games/Oric/dsk/Cobra-Pinball.dsk
-... launch-system Oric         # boot Oric core to BASIC, no media
+... launch-system Oric             # boot Oric core to BASIC, no media
+... launch /media/fat/_Aoric/Oric.rbf   # boot a specific dev RBF
 ```
-
-`launch-system` accepts the system id from `... systems`.
 
 ## Error recovery
 
-- Connection refused / DNS failure: ask the user to `ping mister.local`. If that fails, the device is off, not on the LAN, or `mister.local` mDNS isn't resolving — fall back to the IP via `--host 192.168.0.108`.
-- HTTP 4xx/5xx: the helper prints the response body to stderr; surface that to the user.
-- Remote service not running: on the MiSTer, the Remote service is in `/media/fat/Scripts/`; suggest the user verify it's enabled.
+- Connection refused / DNS failure: ask the user to `ping mister.local`. If that fails, fall back via `--host <ip>` (the build script uses `192.168.0.108`).
+- HTTP 4xx/5xx: helper prints the response body to stderr; surface to user.
+- Remote service not running: live in `/media/fat/Scripts/` on the device — suggest enabling it.
 
-## Out of scope
+## Confirmation guards (commands that need `--yes`)
 
-- WebSocket transport — no live key-hold, no chord/combo support.
-- Game search / index generation (`/games/search`, `/games/index`).
-- INI editing (`/settings/inis/{id}`) and Scripts launcher (`/scripts/...`).
+- `reboot` — full system restart
+- `screenshot-delete` — deletes a file
+- `wallpapers-clear` — clears active wallpaper
+- `menu-delete` — deletes a file on the device
+- `scripts-kill` — kills a running script
+- `settings-remote-restart` — drops the API briefly
+
+When the user asks for any of these, confirm intent before passing `--yes`.
+
+## Out of scope (deliberate)
+
+- WebSocket transport — no live key-hold, no chord/combo support. (Endpoints `kbd:`, `kbdRaw:`, `kbdRawDown:`, `kbdRawUp:`, `getIndexStatus` and the `coreRunning` / `gameRunning` / `menuNavigation` / `indexStatus` event stream are not exposed by the helper.)
 - TLS / auth — the API is plain HTTP, no auth.
-
-These can be added as new subcommands without restructuring the skill.
