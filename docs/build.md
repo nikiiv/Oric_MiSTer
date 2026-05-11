@@ -10,7 +10,7 @@ to a MiSTer over SSH. Run it from the repo root.
 | ----------------------- | ------------------------------------------------------------ |
 | `docker`                | Pulls/runs `raetro/quartus:mister` (Quartus 17.0.2 Lite).    |
 | ssh + scp               | Needed only for deploy; talks to the MiSTer.                 |
-| Reachable MiSTer        | Default target is hardcoded as `root@192.168.0.108`.         |
+| Reachable MiSTer        | Default target is hardcoded as `root@mister.local`.          |
 
 The Docker image is large (~6 GB) and gets pulled on first run.
 
@@ -76,7 +76,7 @@ Edit the `MISTER_HOST`, `MISTER_DEV_DIR`, and `MISTER_OFFICIAL_DIR`
 vars at the top of the script:
 
 ```bash
-MISTER_HOST="root@192.168.0.108"
+MISTER_HOST="root@mister.local"
 MISTER_DEV_DIR="/media/fat/_Aoric"
 MISTER_OFFICIAL_DIR="/media/fat/_Computer"
 ```
