@@ -464,6 +464,12 @@ a Telestrat or RTC on `#0360`. Any code that conditionally probes
 `#320` for `$78` is doing the same FDD-detection trick as
 `pravetzd.rom`.
 
+Implementation note: the current MiSTer proof of concept is documented
+in `pravetz_8d_bank_switching.md`. The important modelling point is
+that the `$0380-$0383` softswitch latches bank and overlay state, but
+overlay RAM must only replace the high `$C000-$FFFF` ROM window. Low
+RAM and page 3 remain accessible while the overlay is selected.
+
 ## 6. Page 4 — `$0400-$04FF`
 
 Per the Atmos manual:

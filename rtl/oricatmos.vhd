@@ -223,6 +223,7 @@ ARCHITECTURE RTL OF oricatmos IS
 	SIGNAL ROM_1_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
 	SIGNAL ROM_PRAVETZ_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
 	SIGNAL ROM_MD_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL ROM_PRAVETZ_BANK_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
 
 	--- Printer port
 	SIGNAL PRN_STROBE : STD_LOGIC;
@@ -241,6 +242,176 @@ ARCHITECTURE RTL OF oricatmos IS
 	SIGNAL cont_RESETn : STD_LOGIC;
 	SIGNAL cont_nOE : STD_LOGIC;
 	SIGNAL cont_irq : STD_LOGIC;
+	SIGNAL md_MAPn : STD_LOGIC := '1';
+	SIGNAL md_ROMDISn : STD_LOGIC := '1';
+	SIGNAL md_IOCONTROLn : STD_LOGIC := '1';
+	SIGNAL md_ECE : STD_LOGIC := '1';
+	SIGNAL md_RESETn : STD_LOGIC := '1';
+	SIGNAL md_nOE : STD_LOGIC := '1';
+	SIGNAL md_irq : STD_LOGIC := '1';
+	SIGNAL pravetz_mode : STD_LOGIC;
+	SIGNAL pravetz_bank : STD_LOGIC := '0';
+	SIGNAL pravetz_shadow : STD_LOGIC := '0';
+	SIGNAL pravetz_bank_window : STD_LOGIC;
+
+	FUNCTION pravetz_poc_bank_byte(
+		bank : STD_LOGIC;
+		addr : STD_LOGIC_VECTOR(7 DOWNTO 0)
+	) RETURN STD_LOGIC_VECTOR IS
+	BEGIN
+		IF bank = '0' THEN
+			CASE addr IS
+				WHEN X"20" => RETURN X"A2"; -- LDX #$00
+				WHEN X"21" => RETURN X"00";
+				WHEN X"22" => RETURN X"BD"; -- LDA msg,X
+				WHEN X"23" => RETURN X"31";
+				WHEN X"24" => RETURN X"03";
+				WHEN X"25" => RETURN X"9D"; -- STA $BB80,X
+				WHEN X"26" => RETURN X"80";
+				WHEN X"27" => RETURN X"BB";
+				WHEN X"28" => RETURN X"E8"; -- INX
+				WHEN X"29" => RETURN X"E0"; -- CPX #5
+				WHEN X"2A" => RETURN X"05";
+				WHEN X"2B" => RETURN X"D0"; -- BNE loop
+				WHEN X"2C" => RETURN X"F5";
+				WHEN X"2D" => RETURN X"8D"; -- STA $0380
+				WHEN X"2E" => RETURN X"80";
+				WHEN X"2F" => RETURN X"03";
+				WHEN X"30" => RETURN X"60"; -- RTS
+				WHEN X"31" => RETURN X"42"; -- "BANK0"
+				WHEN X"32" => RETURN X"41";
+				WHEN X"33" => RETURN X"4E";
+				WHEN X"34" => RETURN X"4B";
+				WHEN X"35" => RETURN X"30";
+				WHEN OTHERS => RETURN X"FF";
+			END CASE;
+		ELSE
+			CASE addr IS
+				-- BANK1 proof: copy ROM to $5800-$97FF, patch it,
+				-- then map shadow RAM and copy the patched image to $C000-$FFFF.
+				WHEN X"20" => RETURN X"78"; -- SEI
+				WHEN X"21" => RETURN X"A9"; -- LDA #'P'
+				WHEN X"22" => RETURN X"50";
+				WHEN X"23" => RETURN X"8D"; -- STA $BB80
+				WHEN X"24" => RETURN X"80";
+				WHEN X"25" => RETURN X"BB";
+				WHEN X"26" => RETURN X"A9"; -- LDA #'1'
+				WHEN X"27" => RETURN X"31";
+				WHEN X"28" => RETURN X"8D"; -- STA $BB81
+				WHEN X"29" => RETURN X"81";
+				WHEN X"2A" => RETURN X"BB";
+				WHEN X"2B" => RETURN X"A9"; -- LDA #$C0
+				WHEN X"2C" => RETURN X"C0";
+				WHEN X"2D" => RETURN X"85"; -- STA $F4
+				WHEN X"2E" => RETURN X"F4";
+				WHEN X"2F" => RETURN X"A9"; -- LDA #$58
+				WHEN X"30" => RETURN X"58";
+				WHEN X"31" => RETURN X"85"; -- STA $F6
+				WHEN X"32" => RETURN X"F6";
+				WHEN X"33" => RETURN X"A9"; -- LDA #$00
+				WHEN X"34" => RETURN X"00";
+				WHEN X"35" => RETURN X"85"; -- STA $F3
+				WHEN X"36" => RETURN X"F3";
+				WHEN X"37" => RETURN X"85"; -- STA $F5
+				WHEN X"38" => RETURN X"F5";
+				WHEN X"39" => RETURN X"A0"; -- LDY #$00
+				WHEN X"3A" => RETURN X"00";
+				WHEN X"3B" => RETURN X"B1"; -- LDA ($F3),Y
+				WHEN X"3C" => RETURN X"F3";
+				WHEN X"3D" => RETURN X"91"; -- STA ($F5),Y
+				WHEN X"3E" => RETURN X"F5";
+				WHEN X"3F" => RETURN X"C8"; -- INY
+				WHEN X"40" => RETURN X"D0"; -- BNE byte loop
+				WHEN X"41" => RETURN X"F9";
+				WHEN X"42" => RETURN X"E6"; -- INC $F4
+				WHEN X"43" => RETURN X"F4";
+				WHEN X"44" => RETURN X"E6"; -- INC $F6
+				WHEN X"45" => RETURN X"F6";
+				WHEN X"46" => RETURN X"A5"; -- LDA $F6
+				WHEN X"47" => RETURN X"F6";
+				WHEN X"48" => RETURN X"C9"; -- CMP #$98
+				WHEN X"49" => RETURN X"98";
+				WHEN X"4A" => RETURN X"D0"; -- BNE page loop
+				WHEN X"4B" => RETURN X"EF";
+				WHEN X"4C" => RETURN X"A9"; -- LDA #'B'
+				WHEN X"4D" => RETURN X"42";
+				WHEN X"4E" => RETURN X"8D"; -- STA $5BB4
+				WHEN X"4F" => RETURN X"B4";
+				WHEN X"50" => RETURN X"5B";
+				WHEN X"51" => RETURN X"A9"; -- LDA #'A'
+				WHEN X"52" => RETURN X"41";
+				WHEN X"53" => RETURN X"8D"; -- STA $5BB5
+				WHEN X"54" => RETURN X"B5";
+				WHEN X"55" => RETURN X"5B";
+				WHEN X"56" => RETURN X"A9"; -- LDA #'N'
+				WHEN X"57" => RETURN X"4E";
+				WHEN X"58" => RETURN X"8D"; -- STA $5BB6
+				WHEN X"59" => RETURN X"B6";
+				WHEN X"5A" => RETURN X"5B";
+				WHEN X"5B" => RETURN X"A9"; -- LDA #'K'
+				WHEN X"5C" => RETURN X"4B";
+				WHEN X"5D" => RETURN X"8D"; -- STA $5BB7
+				WHEN X"5E" => RETURN X"B7";
+				WHEN X"5F" => RETURN X"5B";
+				WHEN X"60" => RETURN X"A9"; -- LDA #'1'
+				WHEN X"61" => RETURN X"31";
+				WHEN X"62" => RETURN X"8D"; -- STA $5BB8
+				WHEN X"63" => RETURN X"B8";
+				WHEN X"64" => RETURN X"5B";
+				WHEN X"65" => RETURN X"A9"; -- LDA #'P'
+				WHEN X"66" => RETURN X"50";
+				WHEN X"67" => RETURN X"8D"; -- STA $BB80
+				WHEN X"68" => RETURN X"80";
+				WHEN X"69" => RETURN X"BB";
+				WHEN X"6A" => RETURN X"A9"; -- LDA #'2'
+				WHEN X"6B" => RETURN X"32";
+				WHEN X"6C" => RETURN X"8D"; -- STA $BB81
+				WHEN X"6D" => RETURN X"81";
+				WHEN X"6E" => RETURN X"BB";
+				WHEN X"6F" => RETURN X"8D"; -- STA $0383
+				WHEN X"70" => RETURN X"83";
+				WHEN X"71" => RETURN X"03";
+				WHEN X"72" => RETURN X"A9"; -- LDA #$58
+				WHEN X"73" => RETURN X"58";
+				WHEN X"74" => RETURN X"85"; -- STA $F4
+				WHEN X"75" => RETURN X"F4";
+				WHEN X"76" => RETURN X"A9"; -- LDA #$C0
+				WHEN X"77" => RETURN X"C0";
+				WHEN X"78" => RETURN X"85"; -- STA $F6
+				WHEN X"79" => RETURN X"F6";
+				WHEN X"7A" => RETURN X"A9"; -- LDA #$00
+				WHEN X"7B" => RETURN X"00";
+				WHEN X"7C" => RETURN X"85"; -- STA $F3
+				WHEN X"7D" => RETURN X"F3";
+				WHEN X"7E" => RETURN X"85"; -- STA $F5
+				WHEN X"7F" => RETURN X"F5";
+				WHEN X"80" => RETURN X"A0"; -- LDY #$00
+				WHEN X"81" => RETURN X"00";
+				WHEN X"82" => RETURN X"B1"; -- LDA ($F3),Y
+				WHEN X"83" => RETURN X"F3";
+				WHEN X"84" => RETURN X"91"; -- STA ($F5),Y
+				WHEN X"85" => RETURN X"F5";
+				WHEN X"86" => RETURN X"C8"; -- INY
+				WHEN X"87" => RETURN X"D0"; -- BNE byte loop
+				WHEN X"88" => RETURN X"F9";
+				WHEN X"89" => RETURN X"E6"; -- INC $F4
+				WHEN X"8A" => RETURN X"F4";
+				WHEN X"8B" => RETURN X"E6"; -- INC $F6
+				WHEN X"8C" => RETURN X"F6";
+				WHEN X"8D" => RETURN X"A5"; -- LDA $F4
+				WHEN X"8E" => RETURN X"F4";
+				WHEN X"8F" => RETURN X"C9"; -- CMP #$98
+				WHEN X"90" => RETURN X"98";
+				WHEN X"91" => RETURN X"D0"; -- BNE page loop
+				WHEN X"92" => RETURN X"EF";
+				WHEN X"93" => RETURN X"58"; -- CLI
+				WHEN X"94" => RETURN X"4C"; -- JMP $C4A8
+				WHEN X"95" => RETURN X"A8";
+				WHEN X"96" => RETURN X"C4";
+				WHEN OTHERS => RETURN X"FF";
+			END CASE;
+		END IF;
+	END FUNCTION;
 
 	-- Controller derived clocks
 	SIGNAL PH2_1 : STD_LOGIC;
@@ -311,6 +482,27 @@ END COMPONENT;
 BEGIN
 
 	RESETn <= (NOT RESET AND KEYB_RESETn);
+	pravetz_mode <= '1' WHEN rom = "10" ELSE '0';
+	pravetz_bank_window <= '1' WHEN pravetz_mode = '1'
+	                         AND cpu_ad(15 DOWNTO 8) = X"03"
+	                         AND unsigned(cpu_ad(7 DOWNTO 0)) >= TO_UNSIGNED(16#20#, 8)
+	                    ELSE '0';
+	ROM_PRAVETZ_BANK_DO <= pravetz_poc_bank_byte(pravetz_bank, cpu_ad(7 DOWNTO 0));
+
+	cont_MAPn <= '0' WHEN pravetz_mode = '1'
+	                      AND pravetz_shadow = '1'
+	                      AND cpu_ad(15 DOWNTO 14) = "11" ELSE
+	             '1' WHEN pravetz_mode = '1' ELSE
+	             md_MAPn;
+	cont_ROMDISn <= '0' WHEN pravetz_mode = '1' AND pravetz_shadow = '1' ELSE
+	                '1' WHEN pravetz_mode = '1' ELSE
+	                md_ROMDISn;
+	cont_IOCONTROLn <= '1' WHEN pravetz_mode = '1' ELSE md_IOCONTROLn;
+	cont_ECE <= '1' WHEN pravetz_mode = '1' ELSE md_ECE;
+	cont_RESETn <= md_RESETn;
+	cont_nOE <= '1' WHEN pravetz_mode = '1' ELSE md_nOE;
+	cont_irq <= '1' WHEN pravetz_mode = '1' ELSE md_irq;
+
 	inst_cpu : ENTITY work.T65
 		PORT MAP(
 			Mode => "00",
@@ -524,24 +716,24 @@ BEGIN
 		DO => cont_D_OUT, -- 6502 Data Bus			 
 		A => cpu_ad (15 DOWNTO 0), -- 6502 Address Bus
 		RnW => cpu_rw, -- 6502 Read-/Write
-		nIRQ => cont_irq, -- 6502 /IRQ
+		nIRQ => md_irq, -- 6502 /IRQ
 		PH2 => ula_PHI2, -- 6502 PH2 
-		nROMDIS => cont_ROMDISn, -- Oric ROM Disable
-		nMAP => cont_MAPn, -- Oric MAP 
+		nROMDIS => md_ROMDISn, -- Oric ROM Disable
+		nMAP => md_MAPn, -- Oric MAP 
 		IO => ula_CSIOn, -- Oric I/O 
-		IOCTRL => cont_IOCONTROLn, -- Oric I/O Control           
-		nHOSTRST => cont_RESETn, -- Oric RESET 
+		IOCTRL => md_IOCONTROLn, -- Oric I/O Control           
+		nHOSTRST => md_RESETn, -- Oric RESET 
 		-- Additional MCU Interface Lines
 		nRESET => RESETn AND pll_locked, -- RESET from MCU
 		--DSEL      => cont_DSEL,                           -- Drive Select
 		--SSEL      => cont_SSEL,                           -- Side Select
 
 		-- EEPROM Control Lines.
-		nECE => cont_ECE, -- Chip Enable
+		nECE => md_ECE, -- Chip Enable
 
 		ENA => disk_enable,
 
-		nOE => cont_nOE,
+		nOE => md_nOE,
 
 		img_mounted => img_mounted,
 		img_wp => img_wp,
@@ -616,6 +808,22 @@ BEGIN
 	                         AND cpu_ad(13 DOWNTO 0) = STD_LOGIC_VECTOR(TO_UNSIGNED(16#26CE#, 14))
 	                    ELSE '0';
 
+	PROCESS (CLK_IN)
+	BEGIN
+		IF rising_edge(CLK_IN) THEN
+			IF RESETn = '0' OR pravetz_mode = '0' THEN
+				pravetz_bank <= '0';
+				pravetz_shadow <= '0';
+			ELSIF ula_phi2 = '1'
+			      AND cpu_rw = '0'
+			      AND cpu_ad(15 DOWNTO 8) = X"03"
+			      AND cpu_ad(7 DOWNTO 2) = "100000" THEN
+				pravetz_bank <= cpu_ad(1);
+				pravetz_shadow <= cpu_ad(0);
+			END IF;
+		END IF;
+	END PROCESS;
+
 
 	PROCESS BEGIN
 
@@ -631,6 +839,9 @@ BEGIN
 		IF cpu_rw = '1' AND ula_phi2 = '1' AND patch_active = '1'
 		      AND ula_CSROMn = '0' AND cont_MAPn = '1' AND cont_ROMDISn = '1' THEN
 			cpu_di <= patch_data;
+			-- Pravetz 8D POC page-3 bank ROM ($0320-$03FF).
+		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND pravetz_bank_window = '1' THEN
+			cpu_di <= ROM_PRAVETZ_BANK_DO;
 			-- expansion port
 		ELSIF cpu_rw = '1' AND ula_PHI2 = '1' AND ula_CSIOn = '0' AND cont_IOCONTROLn = '0' THEN
 			cpu_di <= cont_D_OUT;

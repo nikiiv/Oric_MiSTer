@@ -246,8 +246,8 @@ localparam CONF_STR = {
 	"P1O[16:15],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"P1-;",
 	"P1O[9:8],Audio,Stereo,ABC (West Europe),ACB (East Europe);",
-	"H1O[4:3],ROM,Oric Atmos,Oric 1,Pravetz 8D;",
-	"h1O[4:3],ROM,Oric Atmos,Oric 1,Pravetz 8D,Loadable Bios;",
+	"H1O[4:3],ROM,Pravetz 8D,Oric Atmos,Oric 1;",
+	"h1O[4:3],ROM,Pravetz 8D,Oric Atmos,Oric 1,Loadable Bios;",
 	
 	"-;",
 	"R0,Reset & Apply;",
@@ -602,7 +602,11 @@ oricatmos oricatmos
 
 reg [1:0] rom = 0;
 always @(posedge clk_sys) if(reset) rom <= status[4:3];
-wire [1:0] rom_sel = (rom == 2'd3 && !bios_loaded) ? 2'd0 : rom;
+wire [1:0] rom_sel =
+	(rom == 2'd0) ? 2'd2 :
+	(rom == 2'd1) ? 2'd0 :
+	(rom == 2'd2) ? 2'd1 :
+	(bios_loaded ? 2'd3 : 2'd0);
 assign pravetz_layout = (rom_sel == 2'd2);
 
 reg fdd_ready = 0;
