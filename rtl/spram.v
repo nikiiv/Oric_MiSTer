@@ -23,7 +23,8 @@
 
 module spram #(
 	parameter address_width = 10,
-	parameter data_width = 8
+	parameter data_width = 8,
+	parameter numwords = (2**address_width)
 ) 
 (
 	input	wire									clock,
@@ -33,8 +34,7 @@ module spram #(
 	output	reg		[data_width-1:0]	q
 );
  
-localparam ramLength = (2**address_width);
-reg [data_width-1:0] mem [ramLength-1:0];
+reg [data_width-1:0] mem [numwords-1:0];
 
 always @(posedge clock) begin
 	q <= mem[address];

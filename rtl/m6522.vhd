@@ -93,7 +93,32 @@ entity M6522 is
       I_P2_H                : in    std_logic; -- high for phase 2 clock  ____----__
       RESET_L               : in    std_logic;
       ENA_4                 : in    std_logic; -- clk enable
-      CLK                   : in    std_logic
+      CLK                   : in    std_logic;
+
+      -- Snapshot register restore (driven by Oric.sv snap state machine).
+      -- snap_we forces a direct write of snap_data into the register
+      -- selected by snap_addr, bypassing the chip-select / phi2 protocol
+      -- and the special semantics of IFR/IER/SR.
+      snap_we               : in    std_logic := '0';
+      snap_addr             : in    std_logic_vector(3 downto 0) := (others => '0');
+      snap_data             : in    std_logic_vector(7 downto 0) := (others => '0');
+
+      -- Internal-state restore (timers): pulsed once after register
+      -- restore. Required for snapshots taken mid-frame on games that
+      -- use VIA T1 continuous-mode IRQs for music/animation pacing
+      -- (e.g. Xenon3) — without these the counter starts at the latch
+      -- value and irq phase is wrong, freezing the game.
+      snap_t1c_we           : in    std_logic := '0';
+      snap_t1c_data         : in    std_logic_vector(15 downto 0) := (others => '0');
+      snap_t2c_we           : in    std_logic := '0';
+      snap_t2c_data         : in    std_logic_vector(15 downto 0) := (others => '0');
+      snap_t_active_we      : in    std_logic := '0';
+      snap_t1_active        : in    std_logic := '0';
+      snap_t2_active        : in    std_logic := '0';
+      -- IFR restore: bit 6 = t1_irq, 5 = t2_irq, 4 = cb1, 3 = cb2,
+      -- 2 = sr, 1 = ca1, 0 = ca2. Bit 7 is computed from the others.
+      snap_ifr_we           : in    std_logic := '0';
+      snap_ifr_data         : in    std_logic_vector(6 downto 0) := (others => '0')
    );
 end;
 
@@ -272,7 +297,18 @@ begin
          w_orb_hs <= '0';
          w_ora_hs <= '0';
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_we = '1') then
+            -- Snapshot register restore: direct write, ignores phi2/CS
+            case snap_addr is
+               when x"0" => r_orb  <= snap_data;
+               when x"1" => r_ora  <= snap_data;
+               when x"2" => r_ddrb <= snap_data;
+               when x"3" => r_ddra <= snap_data;
+               when x"B" => r_acr  <= snap_data;
+               when x"C" => r_pcr  <= snap_data;
+               when others => null;
+            end case;
+         elsif (ENA_4 = '1') then
             w_orb_hs <= '0';
             w_ora_hs <= '0';
             if (cs = '1') and (I_RW_L = '0') then
@@ -315,7 +351,19 @@ begin
          r_t2l_l   <= (others => '1');
          r_t2l_h   <= (others => '1');
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_we = '1') then
+            -- Snapshot register restore: latch values without triggering
+            -- t1/t2_load_counter (counters keep their pre-snap value).
+            case snap_addr is
+               when x"4" => r_t1l_l <= snap_data;
+               when x"5" => r_t1l_h <= snap_data;
+               when x"6" => r_t1l_l <= snap_data;
+               when x"7" => r_t1l_h <= snap_data;
+               when x"8" => r_t2l_l <= snap_data;
+               when x"9" => r_t2l_h <= snap_data;
+               when others => null;
+            end case;
+         elsif (ENA_4 = '1') then
             t1_w_reset_int  <= false;
             t1_load_counter <= false;
 
@@ -542,7 +590,12 @@ begin
          cb1_irq <= '0';
          cb2_irq <= '0';
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_ifr_we = '1') then
+            ca2_irq <= snap_ifr_data(0);
+            ca1_irq <= snap_ifr_data(1);
+            cb2_irq <= snap_ifr_data(3);
+            cb1_irq <= snap_ifr_data(4);
+         elsif (ENA_4 = '1') then
             -- not pretty
             if ca1_int then
                ca1_irq <= '1';
@@ -681,7 +734,14 @@ begin
    p_timer1 : process
    begin
       wait until rising_edge(CLK);
-      if (ENA_4 = '1') then
+      if (snap_t1c_we = '1') then
+         t1c <= snap_t1c_data;
+         t1_int_enable <= true; -- assume IRQs were enabled when snap was taken
+      elsif (snap_t_active_we = '1') then
+         t1c_active <= (snap_t1_active = '1');
+      elsif (snap_ifr_we = '1') then
+         t1_irq <= snap_ifr_data(6);
+      elsif (ENA_4 = '1') then
          if t1_load_counter or (t1_reload_counter and phase = "11") then
             t1c( 7 downto 0) <= r_t1l_l;
             t1c(15 downto 8) <= r_t1l_h;
@@ -768,7 +828,14 @@ begin
       variable ena : boolean;
    begin
       wait until rising_edge(CLK);
-      if (ENA_4 = '1') then
+      if (snap_t2c_we = '1') then
+         t2c <= snap_t2c_data;
+         t2_int_enable <= true;
+      elsif (snap_t_active_we = '1') then
+         t2c_active <= (snap_t2_active = '1');
+      elsif (snap_ifr_we = '1') then
+         t2_irq <= snap_ifr_data(5);
+      elsif (ENA_4 = '1') then
          if (t2_cnt_clk ='1') then
             ena := true;
             t2c_active <= true;
@@ -837,7 +904,12 @@ begin
          sr_out <= '0';
          sr_active <= false;
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_we = '1') and (snap_addr = x"A") then
+            -- Snapshot register restore: direct write to SR
+            r_sr <= snap_data;
+         elsif (snap_ifr_we = '1') then
+            sr_irq <= snap_ifr_data(2);
+         elsif (ENA_4 = '1') then
             -- decode mode
             dir_out  := r_acr(4); -- output on cb2
             cb1_op   := '0';
@@ -965,7 +1037,10 @@ begin
       if (RESET_L = '0') then
          r_ier <= "0000000";
       elsif rising_edge(CLK) then
-         if (ENA_4 = '1') then
+         if (snap_we = '1') and (snap_addr = x"E") then
+            -- Snapshot register restore: direct write to IER (ignore bit-7 protocol)
+            r_ier <= snap_data(6 downto 0);
+         elsif (ENA_4 = '1') then
             if ier_write_ena then
                if (load_data(7) = '1') then
                   -- set

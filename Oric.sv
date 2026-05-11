@@ -182,7 +182,7 @@ assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0; 
  
-assign LED_USER    = ioctl_download | fdd_busy | tape_adc_act;
+assign LED_USER    = ioctl_download | fdd_busy | tape_adc_act | led_user_pokeable;
 assign LED_DISK    = led_disk;
 assign LED_POWER   = 0;
 assign BUTTONS     = 0; 
@@ -212,7 +212,8 @@ video_freak video_freak
 `include "build_id.v"
 localparam CONF_STR = {
 	"Oric;;",
-	"F1,TAP,Load TAP file;",	
+	"F1,TAP,Load TAP file;",
+	"F4,SNA,Load Snapshot;",
 	"h0T[53],Rewind Tape;",
 	"-;",
 	"S0,DSK,Mount Drive A:;",
@@ -234,6 +235,9 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1O[51:50],Tape Audio,Mute,Low,High;",
 	"P1O[52],Tape Input,File,ADC;",
+	"P1O[59:58],Tape Load,Fast,Ultra,Off;",
+	"P1O[57],Autoload TAP,On,Off;",
+	"P1O[60],Named CLOAD Rewind,On,Off;",
 	"P1-;",
 	"P1O[55:54],Joystick Adapter,None,PASE,IJK;",
 	"P1-;",
@@ -242,8 +246,8 @@ localparam CONF_STR = {
 	"P1O[16:15],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"P1-;",
 	"P1O[9:8],Audio,Stereo,ABC (West Europe),ACB (East Europe);",
-	"H1O[4:3],ROM,Oric Atmos,Oric 1;",
-	"h1O[4:3],ROM,Oric Atmos,Oric 1,Loadable Bios;",
+	"H1O[4:3],ROM,Oric Atmos,Oric 1,Pravetz 8D;",
+	"h1O[4:3],ROM,Oric Atmos,Oric 1,Pravetz 8D,Loadable Bios;",
 	
 	"-;",
 	"R0,Reset & Apply;",
@@ -255,6 +259,12 @@ wire [1:0] tapeVolume  = status[51:50];
 wire       tapeUseADC = status[52];
 wire       tapeRewind = status[53];
 wire [1:0] joystick_adapter = status[55:54];
+wire       tap_autorun_en   = ~status[57];  // menu shows On (default) / Off
+wire [1:0] tape_load_mode   = status[59:58];
+wire       tape_mode_fast   = (tape_load_mode == 2'd0);
+wire       tape_mode_ultra  = (tape_load_mode == 2'd1);
+wire       tape_mode_off    = (tape_load_mode >= 2'd2);
+wire       named_cload_rewind_en = ~status[60]; // menu shows On (default) / Off
 
 ///////////////////////////////////////////////////
 
@@ -272,12 +282,14 @@ pll pll
 
 reg        reset = 0;
 reg [16:0] clr_addr = 0;
+wire       tap_autorun_reset_req;
+wire       manual_reset_req = RESET | status[0] | buttons[1];
 always @(posedge clk_sys) begin
 
 	if(~&clr_addr) clr_addr <= clr_addr + 1'd1;
 	else reset <= 0;
 
-	if(RESET | status[0] | buttons[1]) begin
+	if(manual_reset_req | tap_autorun_reset_req) begin
 		clr_addr <= 0;
 		reset <= 1;
 	end
@@ -321,6 +333,9 @@ wire  [24:0] ioctl_addr;
 wire   [7:0] ioctl_dout;
 wire         ioctl_download;
 wire   [7:0] ioctl_index;
+wire         load_tape = ioctl_index==1;
+wire         load_sna  = ioctl_index==4;
+reg          ioctl_downlD;
 
 wire         status_set;
 wire  [31:0] status_out;
@@ -381,9 +396,43 @@ begin
 end
 ///////////////////////////////////////////////////
 
-wire key_strobe = old_keystb ^ ps2_key[10];
+wire        tap_load_pulse = ioctl_downlD && ~ioctl_download && load_tape;
+wire        tap_autorun_active;
+wire [10:0] tap_autorun_ps2_key;
+wire [10:0] kbd_ps2_key = tap_autorun_active ? tap_autorun_ps2_key : ps2_key;
+wire        hps_key_strobe;
+wire        tap_autorun_key_strobe;
+wire        pravetz_layout;
+
+tap_autorun_keys tap_autorun_keys (
+	.clk_sys    (clk_sys),
+	.hard_reset (manual_reset_req),
+	.start      (tap_load_pulse && tap_autorun_en),
+	.oric_reset (reset),
+	.pravetz_layout (pravetz_layout),
+	.reset_req  (tap_autorun_reset_req),
+	.active     (tap_autorun_active),
+	.ps2_key    (tap_autorun_ps2_key)
+);
+
+reg  tap_start_rewind = 1'b0;
+wire tap_start_rewind_ack;
+always @(posedge clk_sys) begin
+	if (tap_load_pulse || ((manual_reset_req || tap_autorun_reset_req) && tape_loaded))
+		tap_start_rewind <= 1'b1;
+	else if (tap_start_rewind_ack)
+		tap_start_rewind <= 1'b0;
+end
+
+wire key_strobe = tap_autorun_active ? tap_autorun_key_strobe : hps_key_strobe;
 reg old_keystb = 0;
-always @(posedge clk_sys) old_keystb <= ps2_key[10];
+reg old_tap_autorun_keystb = 0;
+always @(posedge clk_sys) begin
+	old_keystb <= ps2_key[10];
+	old_tap_autorun_keystb <= tap_autorun_ps2_key[10];
+end
+assign hps_key_strobe = old_keystb ^ ps2_key[10];
+assign tap_autorun_key_strobe = old_tap_autorun_keystb ^ tap_autorun_ps2_key[10];
 
 
 wire  [11:0] psg_a;
@@ -397,6 +446,19 @@ wire        r, g, b;
 wire        hs, vs, HBlank, VBlank;
 wire        clk_pix;
 wire        tape_in, tape_out;
+localparam FILE_CACHE_ADDR_WIDTH = 18;
+localparam FILE_CACHE_NUMWORDS   = 196608; // 192 KiB, shared by TAP and SNA loads.
+localparam TAP_CACHE_NUMWORDS    = 163840; // 160 KiB TAP limit.
+localparam [FILE_CACHE_ADDR_WIDTH-1:0] FILE_CACHE_LAST = FILE_CACHE_NUMWORDS - 1;
+localparam [FILE_CACHE_ADDR_WIDTH-1:0] TAP_CACHE_LAST  = TAP_CACHE_NUMWORDS - 1;
+
+wire        tap_byte_consume;
+wire        tap_byte_active;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] tap_byte_cache_addr;
+wire  [7:0] tap_byte_data;
+
+wire        snap_active;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] snap_cache_addr;
 
 wire [15:0] ram_ad;
 wire [15:0] spram_addr;
@@ -411,6 +473,16 @@ always @(posedge clk_sys) begin
 		spram_d <= 1;
 		spram_addr <= clr_addr[15:0];
 		spram_we <= 1'b1;
+	end
+	else if (snap_active) begin
+		spram_d <= snap_ram_data;
+		spram_addr <= snap_ram_addr;
+		spram_we <= snap_ram_we;
+	end
+	else if (tap_active) begin
+		spram_d <= tap_ram_data;
+		spram_addr <= tap_ram_addr;
+		spram_we <= tap_ram_we;
 	end
 	else begin
 		spram_d <= ram_d;
@@ -435,10 +507,11 @@ oricatmos oricatmos
 (
 	.clk_in           (clk_sys),
 	.RESET            (reset),
-	.key_pressed      (ps2_key[9]),
-	.key_code         (ps2_key[7:0]),
-	.key_extended     (ps2_key[8]),
+	.key_pressed      (kbd_ps2_key[9]),
+	.key_code         (kbd_ps2_key[7:0]),
+	.key_extended     (kbd_ps2_key[8]),
 	.key_strobe       (key_strobe),
+	.pravetz_layout   (pravetz_layout),
 	.PSG_OUT_A        (psg_a),
 	.PSG_OUT_B        (psg_b),
 	.PSG_OUT_C        (psg_c),
@@ -470,7 +543,7 @@ oricatmos oricatmos
 	.phi2             (),
 	.pll_locked       (locked),
 	.disk_enable      ((!status[6:5]) ? ~fdd_ready : status[5]),
-	.rom              ({rom[1] & bios_loaded, rom[0]}),
+	.rom              (rom_sel),
 	.bios_addr        (bios_addr),
 	.bios_din         (bios_din),
 
@@ -492,13 +565,45 @@ oricatmos oricatmos
 	.sd_din_fd2       (sd_buff_din[2]),
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
-	.sd_din_strobe    (0)
+	.sd_din_strobe    (0),
+	.cpu_halt         (snap_active | tap_active | tap_byte_active),
+	.cpu_regs_set     (cpu_regs_set),
+	.cpu_regs_set_we  (cpu_regs_set_we),
+	.via_snap_we      (via_snap_we),
+	.via_snap_addr    (via_snap_addr),
+	.via_snap_data    (via_snap_data),
+	.via_snap_t1c_we      (via_snap_t1c_we),
+	.via_snap_t1c_data    (via_snap_t1c_data),
+	.via_snap_t2c_we      (via_snap_t2c_we),
+	.via_snap_t2c_data    (via_snap_t2c_data),
+	.via_snap_t_active_we (via_snap_t_active_we),
+	.via_snap_t1_active   (via_snap_t1_active),
+	.via_snap_t2_active   (via_snap_t2_active),
+	.via_snap_ifr_we      (via_snap_ifr_we),
+	.via_snap_ifr_data    (via_snap_ifr_data),
+	.ay_snap_we       (ay_snap_we),
+	.ay_snap_addr     (ay_snap_addr),
+	.ay_snap_data     (ay_snap_data),
+	.ay_snap_creg_we  (ay_snap_creg_we),
+	.ay_snap_creg     (ay_snap_creg),
+	.ula_snap_mode_we (ula_snap_mode_we),
+	.ula_snap_mode    (ula_snap_mode),
+	.patch_active     (cload_patch_active),
+	.patch_data       (cload_patch_data),
+	.c000_we          (c000_we),
+	.c000_data        (c000_data),
+	.named_cload_we   (named_cload_we),
+	.tape_byte_enable (tape_mode_fast),
+	.tap_sync_request (tap_sync_request),
+	.tap_byte_consume (tap_byte_consume)
 );
 
 
 
 reg [1:0] rom = 0;
 always @(posedge clk_sys) if(reset) rom <= status[4:3];
+wire [1:0] rom_sel = (rom == 2'd3 && !bios_loaded) ? 2'd0 : rom;
+assign pravetz_layout = (rom_sel == 2'd2);
 
 reg fdd_ready = 0;
 always @(posedge clk_sys) if(img_mounted) fdd_ready <= |img_size;
@@ -556,6 +661,20 @@ spram #(.address_width(14)) altbios (
   .q(bios_din)
 );
 
+// Tape live ROM patches. Ultra mode patches CLOAD into the instant
+// segment loader. Fast mode patches ROM cassette sync/byte routines
+// into the byte streamer. Off mode leaves the ROM untouched.
+wire        cload_patch_active;
+wire  [7:0] cload_patch_data;
+cload_patch_rom cload_patch_rom (
+	.ultra_enable(tape_mode_ultra),
+	.fast_enable (tape_mode_fast),
+	.fast_byte_data(tap_byte_data),
+	.rom_addr    (bios_addr[13:0]),
+	.patch_active(cload_patch_active),
+	.patch_data  (cload_patch_data)
+);
+
 ///////////////////////////////////////////////////
 
 wire [10:0] tapeAudio;
@@ -573,26 +692,45 @@ assign AUDIO_R = (stereo == 2'b00) ? {1'b0,psg_out+tapeAudio,1'b0} : (stereo == 
 wire casdout;
 wire cas_relay;
 
-wire        load_tape = ioctl_index==1;
-reg  [15:0] tape_end;
+reg  [FILE_CACHE_ADDR_WIDTH-1:0] tape_end;
 reg         tape_loaded = 1'b0;
-reg         ioctl_downlD;
+reg  [FILE_CACHE_ADDR_WIDTH-1:0] snap_end;
 
-wire [15:0] tape_addr;
-wire [7:0]  tape_data;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] tape_addr;
+wire [7:0]  filecache_q;
+wire [7:0]  tape_data = filecache_q;
+wire [7:0]  snap_cache_q = filecache_q;
 
-spram #(.address_width(16)) tapecache (
+wire file_download_active   = ioctl_download && (load_tape || load_sna);
+wire file_download_in_range = load_tape ? (ioctl_addr < TAP_CACHE_NUMWORDS) :
+                              load_sna  ? (ioctl_addr < FILE_CACHE_NUMWORDS) :
+                                          1'b0;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] file_download_last =
+  load_tape ? TAP_CACHE_LAST : FILE_CACHE_LAST;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] file_download_addr =
+  file_download_in_range ? ioctl_addr[FILE_CACHE_ADDR_WIDTH-1:0] : file_download_last;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] file_selected_addr =
+  file_download_active ? file_download_addr :
+  snap_active          ? snap_cache_addr :
+  tap_active           ? tap_cache_addr :
+  tap_byte_active      ? tap_byte_cache_addr :
+                         tape_addr;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] filecache_addr =
+  (file_selected_addr > FILE_CACHE_LAST) ? FILE_CACHE_LAST : file_selected_addr;
+
+spram #(.address_width(FILE_CACHE_ADDR_WIDTH), .numwords(FILE_CACHE_NUMWORDS)) filecache (
   .clock(clk_sys),
 
-  .address((ioctl_index == 1 && ioctl_download) ? ioctl_addr: tape_addr),
+  .address(filecache_addr),
   .data(ioctl_dout),
-  .wren(ioctl_wr && load_tape),
-  .q(tape_data)
+  .wren(ioctl_wr && (load_tape || load_sna) && file_download_in_range),
+  .q(filecache_q)
 );
 
 
 always @(posedge clk_sys) begin
- if (load_tape) tape_end <= ioctl_addr[15:0];
+	if (load_tape && ioctl_download) tape_end <= file_download_addr;
+	if (load_sna && ioctl_download) snap_end <= file_download_addr;
 end
 
 always @(posedge clk_sys) begin
@@ -605,12 +743,145 @@ cassette cassette (
   .clk(clk_sys),
   .reset(reset),
   .rewind(tapeRewind | (load_tape && ioctl_download)),
-  .en(cas_relay && tape_loaded && ~tapeUseADC), 
+  .en(cas_relay && tape_loaded && ~tapeUseADC && tape_mode_off),
   .tape_addr(tape_addr),
   .tape_data(tape_data),
 
   .tape_end(tape_end),
   .data(casdout)
+);
+
+// ---- Multi-stage TAP segment loader (rtl/tap_segment_loader.v) ----
+// Triggered by the patched BASIC CLOAD doing `LDA #$01 / STA $C000`.
+// Pulls one segment per trigger from the shared file cache into RAM, populates
+// the BASIC-state side effects (start/end pointers, autorun, type,
+// TXTTAB/TXTEND), then releases CPU. Status-row paint at $BB80 is
+// left to the ROM ($E651) so HIRES programs that use that area as
+// their own data aren't disturbed. Lets multi-segment .tap files
+// load in stages so inter-segment BASIC code runs between calls.
+wire        tap_active;
+wire [15:0] tap_ram_addr;
+wire  [7:0] tap_ram_data;
+wire        tap_ram_we;
+wire [FILE_CACHE_ADDR_WIDTH-1:0] tap_cache_addr;
+tap_segment_loader tap_seg (
+	.clk_sys        (clk_sys),
+	.reset          (reset),
+	.trigger        (c000_we && c000_data == 8'd1 && tape_mode_ultra && tape_loaded),
+	.tape_load_pulse(tap_load_pulse),
+	.tape_end       (tape_end),
+	.tape_data      (tape_data),
+	.cache_addr     (tap_cache_addr),
+	.active         (tap_active),
+	.ram_addr       (tap_ram_addr),
+	.ram_data       (tap_ram_data),
+	.ram_we         (tap_ram_we)
+);
+
+// ---- Fast TAP byte streamer (rtl/tap_byte_streamer.v) ----
+// Used by Tape Load = Fast. The patched ROM GETTAPEBYTE routine
+// embeds tap_byte_data as an immediate operand; each operand fetch
+// consumes one byte and prefetches the next one.
+wire named_cload_rewind = named_cload_we && tape_mode_fast &&
+                          tape_loaded && named_cload_rewind_en;
+tap_byte_streamer tap_byte_streamer (
+	.clk_sys        (clk_sys),
+	.reset          (reset),
+	.consume        (tap_byte_consume && tape_mode_fast && tape_loaded),
+	.sync_request   (tap_sync_request && tape_mode_fast && tape_loaded),
+	.named_rewind   (named_cload_rewind),
+	.start_rewind   (tap_start_rewind && tape_mode_fast && tape_loaded),
+	.tape_load_pulse(tap_load_pulse),
+	.rewind         (tapeRewind),
+	.tape_end       (tape_end),
+	.tape_data      (tape_data),
+	.cache_addr     (tap_byte_cache_addr),
+	.active         (tap_byte_active),
+	.start_rewind_ack(tap_start_rewind_ack),
+	.byte_data      (tap_byte_data)
+);
+
+// Host LED mailbox: oricatmos.vhd snoops CPU writes to $C000 and
+// emits c000_we (1-cycle strobe) + c000_data (the byte being
+// written). led_user_pokeable latches the bit: data==1 sets,
+// data==0 clears, anything else holds. Driven into the MiSTer USER
+// LED below (OR'd with the existing activity sources).
+wire        c000_we;
+wire  [7:0] c000_data;
+wire        named_cload_we;
+wire        tap_sync_request;
+reg         led_user_pokeable = 1'b0;
+always @(posedge clk_sys) begin
+	if (reset) led_user_pokeable <= 1'b0;
+	else if (c000_we) begin
+		if (c000_data == 8'd1) led_user_pokeable <= 1'b1;
+		else if (c000_data == 8'd0) led_user_pokeable <= 1'b0;
+	end
+end
+
+// ---- Snapshot LOAD .sna (rtl/snap_loader.v) ----
+// Block format and field-level mapping in docs/sna_support.md.
+// The shared filecache spram is owned by this top level; snap_loader
+// reads it while applying RAM/CPU/AY/VIA restore outputs.
+wire [15:0] snap_ram_addr;
+wire  [7:0] snap_ram_data;
+wire        snap_ram_we;
+wire [63:0] cpu_regs_set;
+wire        cpu_regs_set_we;
+wire        via_snap_we;
+wire  [3:0] via_snap_addr;
+wire  [7:0] via_snap_data;
+wire        via_snap_t1c_we;
+wire [15:0] via_snap_t1c_data;
+wire        via_snap_t2c_we;
+wire [15:0] via_snap_t2c_data;
+wire        via_snap_t_active_we;
+wire        via_snap_t1_active;
+wire        via_snap_t2_active;
+wire        via_snap_ifr_we;
+wire  [6:0] via_snap_ifr_data;
+wire        ay_snap_we;
+wire  [3:0] ay_snap_addr;
+wire  [7:0] ay_snap_data;
+wire        ay_snap_creg_we;
+wire  [3:0] ay_snap_creg;
+wire        ula_snap_mode_we;
+wire  [2:0] ula_snap_mode;
+
+snap_loader snap_loader (
+	.clk_sys         (clk_sys),
+	.reset           (reset),
+	.ioctl_download  (ioctl_download),
+	.ioctl_downlD    (ioctl_downlD),
+	.load_sna        (load_sna),
+	.snap_end        (snap_end),
+	.snap_cache_addr (snap_cache_addr),
+	.snap_cache_q    (snap_cache_q),
+	.active          (snap_active),
+	.ram_addr        (snap_ram_addr),
+	.ram_data        (snap_ram_data),
+	.ram_we          (snap_ram_we),
+	.cpu_regs_set    (cpu_regs_set),
+	.cpu_regs_set_we (cpu_regs_set_we),
+	.via_snap_we     (via_snap_we),
+	.via_snap_addr   (via_snap_addr),
+	.via_snap_data   (via_snap_data),
+	.via_snap_t1c_we      (via_snap_t1c_we),
+	.via_snap_t1c_data    (via_snap_t1c_data),
+	.via_snap_t2c_we      (via_snap_t2c_we),
+	.via_snap_t2c_data    (via_snap_t2c_data),
+	.via_snap_t_active_we (via_snap_t_active_we),
+	.via_snap_t1_active   (via_snap_t1_active),
+	.via_snap_t2_active   (via_snap_t2_active),
+	.via_snap_ifr_we      (via_snap_ifr_we),
+	.via_snap_ifr_data    (via_snap_ifr_data),
+	.ay_snap_we      (ay_snap_we),
+	.ay_snap_addr    (ay_snap_addr),
+	.ay_snap_data    (ay_snap_data),
+	.ay_snap_creg_we (ay_snap_creg_we),
+	.ay_snap_creg    (ay_snap_creg),
+	.ula_snap_mode_we (ula_snap_mode_we),
+	.ula_snap_mode   (ula_snap_mode)
 );
 
 ///////////////////////////////////////////////////

@@ -156,6 +156,8 @@ entity T65 is
     DO      : out std_logic_vector(7 downto 0);
     -- 6502 registers (MSB) PC, SP, P, Y, X, A (LSB)
     Regs    : out std_logic_vector(63 downto 0);
+    Regs_set    : in  std_logic_vector(63 downto 0) := (others => '0');
+    Regs_set_we : in  std_logic := '0';
     DEBUG   : out T_t65_dbg;
     NMI_ack : out std_logic
   );
@@ -350,7 +352,22 @@ begin
       XF_i <= '1';
 
     elsif Clk'event and Clk = '1' then  
-      if (Enable = '1') then
+      if Regs_set_we = '1' then
+        -- Snapshot register restore: clear inflight instruction state, load PC/S
+        PC <= unsigned(Regs_set(63 downto 48));
+        S  <= unsigned(Regs_set(47 downto 32));
+        IR <= "00000000";
+        PBR <= (others => '0');
+        DBR <= (others => '0');
+        Mode_r <= (others => '0');
+        ALU_Op_r <= ALU_OP_BIT;
+        Write_Data_r <= Write_Data_DL;
+        Set_Addr_To_r <= Set_Addr_To_PBR;
+        WRn_i <= '1';
+        EF_i <= '1';
+        MF_i <= '1';
+        XF_i <= '1';
+      elsif (Enable = '1') then
         -- some instructions behavior changed by the Rdy line. Detect this at the correct cycles.
         if MCycle  = "000" then
           rdy_mod <= '0';
@@ -437,7 +454,13 @@ begin
       P <= x"00"; -- ensure we have nothing set on reset
     elsif Clk'event and Clk = '1' then
       tmpP:=P;
-      if (Enable = '1') then
+      if Regs_set_we = '1' then
+        -- Snapshot register restore: load P/X/Y/A
+        P <= Regs_set(31 downto 24);
+        Y(7 downto 0) <= Regs_set(23 downto 16);
+        X(7 downto 0) <= Regs_set(15 downto 8);
+        ABC(7 downto 0) <= Regs_set(7 downto 0);
+      elsif (Enable = '1') then
         if (really_rdy = '1') then
           if MCycle = "000" then
             if LDA = '1' then
@@ -669,7 +692,14 @@ begin
       NMICycle <= '0';
       NMIAct <= '0';
     elsif Clk'event and Clk = '1' then
-      if (Enable = '1') then
+      if Regs_set_we = '1' then
+        -- Snapshot register restore: start a clean opcode fetch from the loaded PC
+        MCycle <= "000";
+        RstCycle <= '0';
+        IRQCycle <= '0';
+        NMICycle <= '0';
+        NMIAct <= '0';
+      elsif (Enable = '1') then
         if (really_rdy = '1') then
           if MCycle = LCycle or Break = '1' then
             MCycle <= "000";

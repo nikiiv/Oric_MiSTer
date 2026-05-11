@@ -6,10 +6,10 @@ module cassette(
   input rewind,
   input en,
   
-  output reg [15:0] tape_addr,
+  output reg [17:0] tape_addr,
   input [7:0] tape_data,
 
-  input [15:0] tape_end,
+  input [17:0] tape_end,
   output data
 
 );
@@ -27,7 +27,7 @@ reg [2:0] state;
 reg sq_start;
 reg [1:0] eof;
 reg [8:0] sync_count;
-reg [15:0] bot_seg; //Beginning of TAP segment
+reg [17:0] bot_seg; //Beginning of TAP segment
 reg [15:0] data_start_addr;  //The Start Address of the Data, as derived from the Header
 reg [15:0] data_end_addr;    //The End Address of the Data, as derived from the Header
 reg [15:0] data_size;        //The Data size (data_end_addr - data_start_addr + 1)
@@ -59,8 +59,8 @@ always @(posedge clk) begin
 		eof <= 2'b00;
 		gap <= 1'b0;
 		gap_sent <= 1'b0;
-		tape_addr <= 16'd0;
-		bot_seg <= 16'd0;
+		tape_addr <= 18'd0;
+		bot_seg <= 18'd0;
 		data_start_addr <= 16'd0;
 		data_end_addr <= 16'd0;
 		data_size <= 16'd0;
@@ -103,14 +103,14 @@ always @(posedge clk) begin
 			end
 			if(~eos && r_tape_data == 8'h24) begin //Look for End of Sync marker till we find it
 				eos <= 1'b1;                        //Raise the End of Sync flag so we can stop looking for it
-				bot_seg <= tape_addr + 1'b1;        //Set the Beginning of Tape Segment address to the first byte of the Header (current address + 1)
+				bot_seg <= tape_addr + 18'd1;       //Set the Beginning of Tape Segment address to the first byte of the Header (current address + 1)
 			end
-			if(tape_addr == bot_seg + 8'd4) data_end_addr[15:8] = r_tape_data;
-			if(tape_addr == bot_seg + 8'd5) data_end_addr[7:0] = r_tape_data;
-			if(tape_addr == bot_seg + 8'd6) data_start_addr[15:8] = r_tape_data;
-			if(tape_addr == bot_seg + 8'd7) data_start_addr[7:0] = r_tape_data;
-			if(tape_addr == bot_seg + 8'd8) data_size <= (data_end_addr - data_start_addr) + 16'd2;
-			if(tape_addr >= bot_seg + 8'd9 && ~eoh) begin                              //Starting with 9 bytes after the BoT segment,
+			if(tape_addr == bot_seg + 18'd4) data_end_addr[15:8] = r_tape_data;
+			if(tape_addr == bot_seg + 18'd5) data_end_addr[7:0] = r_tape_data;
+			if(tape_addr == bot_seg + 18'd6) data_start_addr[15:8] = r_tape_data;
+			if(tape_addr == bot_seg + 18'd7) data_start_addr[7:0] = r_tape_data;
+			if(tape_addr == bot_seg + 18'd8) data_size <= (data_end_addr - data_start_addr) + 16'd2;
+			if(tape_addr >= bot_seg + 18'd9 && ~eoh) begin                             //Starting with 9 bytes after the BoT segment,
 				if(r_tape_data == 8'h00) begin                                          //look for the terminating 'h0 of the FileName
 					eoh <= 1'b1;                                                         //Raise the End of Header flag
 					gap_sent <= 1'b0;                                                    //Reset the Gap Sent Flag
@@ -135,11 +135,11 @@ always @(posedge clk) begin
 				sync_count <= sync_count + 1'b1;
 			end
 			else begin
-				tape_addr <= tape_addr + 1'd1;                   //Advance the tape cache address by 1
+				tape_addr <= tape_addr + 18'd1;                  //Advance the tape cache address by 1
 				if(eoh) begin
 					if(data_size) data_size <= data_size - 1'b1;  //Decrement Data Size till we hit 0
 					else begin
-						bot_seg <= 16'd0;                          //Reset the Beginning of TAP segment address in case there is another segment on tape
+						bot_seg <= 18'd0;                          //Reset the Beginning of TAP segment address in case there is another segment on tape
 						sync_count <= 9'h000;                      //Reset the Sync Marker count
 						wait_counter <= 24'd12000000;
 					end
