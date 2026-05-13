@@ -224,18 +224,20 @@ localparam CONF_STR = {
 	"T[126],Save state(Alt+F1-F4);",
 	"T[127],Load state(F1-F4);",
 	"-;",
-	"S0,DSKNIB,Mount Drive A:;",
-	"S1,DSKNIB,Mount Drive B:;",
-	"S2,DSK,Mount Drive C:;",
-	"S3,DSK,Mount Drive D:;",
+	"h6S0,NIBDSKDO ,Mount Drive A:;",
+	"h6S1,NIBDSKDO ,Mount Drive B:;",
+	"H6S0,DSK,Mount Drive A:;",
+	"H6S1,DSK,Mount Drive B:;",
+	"H6S2,DSK,Mount Drive C:;",
+	"H6S3,DSK,Mount Drive D:;",
 	"H2O[17],Drive A Write Protect,Off,On;",
 	"h2-,Drive A is Write Protected;",
 	"H3O[18],Drive B Write Protect,Off,On;",
 	"h3-,Drive B is Write Protected;",
-	"H4O[19],Drive C Write Protect,Off,On;",
-	"h4-,Drive C is Write Protected;",
-	"H5O[20],Drive D Write Protect,Off,On;",
-	"h5-,Drive D is Write Protected;",
+	"H6H4O[19],Drive C Write Protect,Off,On;",
+	"H6h4-,Drive C is Write Protected;",
+	"H6H5O[20],Drive D Write Protect,Off,On;",
+	"H6h5-,Drive D is Write Protected;",
 	"-;",
 	"P1,Settings;",
 	"P1O[6:5],FDD Controller,Auto,Off,On;",
@@ -351,7 +353,8 @@ wire         status_set;
 wire  [31:0] status_out;
 
 wire  [21:0] gamma_bus;
-wire  [15:0] status_mask = {10'd0, img_wp, bios_loaded, tape_loaded & ~tapeUseADC & ~cas_relay};
+wire         pravetz_layout;
+wire  [15:0] status_mask = {9'd0, pravetz_layout, img_wp, bios_loaded, tape_loaded & ~tapeUseADC & ~cas_relay};
 
 hps_io #(.CONF_STR(CONF_STR), .VDNUM(4)) hps_io
 (
@@ -412,7 +415,6 @@ wire [10:0] tap_autorun_ps2_key;
 wire [10:0] kbd_ps2_key = tap_autorun_active ? tap_autorun_ps2_key : ps2_key;
 wire        hps_key_strobe;
 wire        tap_autorun_key_strobe;
-wire        pravetz_layout;
 
 tap_autorun_keys tap_autorun_keys (
 	.clk_sys    (clk_sys),
