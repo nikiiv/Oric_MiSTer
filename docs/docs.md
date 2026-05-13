@@ -35,7 +35,8 @@ communication between the emulated 6502 and the FPGA core.
 - `pravetz_8d_fdc.md` documents the current Pravetz 8D FDC implementation:
   Apple II Disk II softswitches at `$0310-$031F`, BANK0/BANK1 controller ROM
   mapping at `$0320-$03FF`, `$0380-$0383` bank/shadow latches, `.nib` image
-  handling, and MiSTer validation notes.
+  handling, Pravetz `.dsk`/`.do` conversion requirements, and MiSTer
+  validation notes.
 
 ## Oric reference material
 

@@ -4,12 +4,12 @@ This note documents the current Pravetz 8D floppy-controller support in
 the MiSTer core. The implementation keeps the original Pravetz controller
 ROM banks at `$0320-$03FF`, implements the Apple II Disk II style
 softswitches at `$0310-$031F`, and mounts Disk II `.nib` or Apple DOS
-`.dsk` images through the MiSTer disk path.
+`.dsk`/`.do` images through the MiSTer disk path.
 
 The FPGA-side controller always consumes Disk II NIB track data. Raw
-`.nib` images pass through directly. Apple DOS `.dsk` images require a
-Main MiSTer build that enables the existing Apple II `.dsk` to `.nib`
-translation path for the Oric core name.
+`.nib` images pass through directly. Apple DOS `.dsk`/`.do` images
+require a Main MiSTer build that enables the existing Apple II sector
+image to `.nib` translation path for Pravetz Oric Drive A/B mounts.
 
 ## Source Layout
 
@@ -111,23 +111,34 @@ no separate overlay RAM block.
 
 ## Disk Image Path
 
-Drive A and Drive B use the same OSD disk type contract as the Apple II
-core: `NIBDSKDO PO`. In Pravetz mode:
+The OSD disk rows are selected by the loaded ROM layout. When the
+Pravetz ROM is active, Drive A and Drive B use the Apple II style image
+contract `NIBDSKDO`, exposing `.nib`, `.dsk`, and `.do` mounts:
 
 - Drive A maps to MiSTer disk slot 0 and `sd_lba_fd0`.
 - Drive B maps to MiSTer disk slot 1 and `sd_lba_fd1`.
 - Drive C and Drive D are unused by the Pravetz FDC path.
-- Outside Pravetz mode, the existing Microdisc path owns the disk HPS
-  interface.
+- `.po` is intentionally not exposed for Pravetz 8D.
+
+When the Oric Atmos or Oric-1 ROM layout is active, the menu instead
+exposes four Microdisc-oriented DSK slots:
+
+- Drive A maps to MiSTer disk slot 0.
+- Drive B maps to MiSTer disk slot 1.
+- Drive C maps to MiSTer disk slot 2.
+- Drive D maps to MiSTer disk slot 3.
+
+The OSD visibility mask uses bit 6 of `status_menumask` for this ROM
+layout selection.
 
 Each Disk II track is represented as `0x1A00` bytes. A 35-track `.nib`
 image is therefore `35 * 0x1A00 = 0x38A00` bytes, or `232960` bytes.
 The Pravetz RTL always requests these 13 512-byte LBAs per track.
 
-For `.dsk` mounts, Main MiSTer recognizes the image as Apple II DSK,
-converts each requested DSK track into the same NIB byte stream, and
-converts dirty NIB tracks back into DSK sectors on writeback. The Oric
-core does not contain a `.dsk` parser.
+For Pravetz `.dsk` and `.do` mounts, Main MiSTer recognizes the image as
+an Apple II sector image, converts each requested track into the same NIB
+byte stream, and converts dirty NIB tracks back into sectors on
+writeback. The Oric core does not contain a `.dsk` or `.do` parser.
 
 `floppy_track.sv` provides the per-drive track buffers. It loads the
 requested track through the HPS block interface, exposes the byte stream
@@ -176,10 +187,10 @@ The deployed test flow was:
 ## Current Limits
 
 - `.nib` is the validated raw format for the Pravetz FDC path.
-- `.dsk` support depends on Main MiSTer exposing Oric `.dsk` mounts
-  through the Apple II DSK conversion path.
+- `.dsk` and `.do` support depend on Main MiSTer exposing Pravetz Drive
+  A/B mounts through the Apple II sector-image conversion path.
 - The hardware smoke test validated the DOS boot/read path. A separate
   write-persistence test is still needed.
 - Snapshot save/restore of live Pravetz FDC state is not implemented.
-- Drive C and Drive D remain Microdisc-oriented and are not part of the
+- Drive C and Drive D are hidden in Pravetz mode and are not part of the
   Pravetz Disk II path.
