@@ -3,12 +3,13 @@
 This note documents the current Pravetz 8D floppy-controller support in
 the MiSTer core. The implementation keeps the original Pravetz controller
 ROM banks at `$0320-$03FF`, implements the Apple II Disk II style
-softswitches at `$0310-$031F`, and mounts `.nib` images through the
-existing MiSTer disk path.
+softswitches at `$0310-$031F`, and mounts Disk II `.nib` or Apple DOS
+`.dsk` images through the MiSTer disk path.
 
-The first supported disk format is `.nib`. The HPS-side `.dsk` to `.nib`
-conversion and any `.dsk` writeback behavior are outside this core-side
-implementation.
+The FPGA-side controller always consumes Disk II NIB track data. Raw
+`.nib` images pass through directly. Apple DOS `.dsk` images require a
+Main MiSTer build that enables the existing Apple II `.dsk` to `.nib`
+translation path for the Oric core name.
 
 ## Source Layout
 
@@ -22,6 +23,8 @@ implementation.
   `floppy_track.sv`.
 - `_Games/_Oric/dos_8d_nib.mgl` launches the core with a `.nib` image
   mounted in Drive A.
+- `_Games/_Oric/dos_8d_dsk.mgl` launches the core with a `.dsk` image
+  mounted in Drive A. This needs the matching Main MiSTer HPS change.
 
 ## Address Map
 
@@ -108,8 +111,8 @@ no separate overlay RAM block.
 
 ## Disk Image Path
 
-Drive A and Drive B accept `DSK` and `NIB` in the OSD, but the Pravetz
-FDC path currently expects `.nib` data. In Pravetz mode:
+Drive A and Drive B use the same OSD disk type contract as the Apple II
+core: `NIBDSKDO PO`. In Pravetz mode:
 
 - Drive A maps to MiSTer disk slot 0 and `sd_lba_fd0`.
 - Drive B maps to MiSTer disk slot 1 and `sd_lba_fd1`.
@@ -119,6 +122,12 @@ FDC path currently expects `.nib` data. In Pravetz mode:
 
 Each Disk II track is represented as `0x1A00` bytes. A 35-track `.nib`
 image is therefore `35 * 0x1A00 = 0x38A00` bytes, or `232960` bytes.
+The Pravetz RTL always requests these 13 512-byte LBAs per track.
+
+For `.dsk` mounts, Main MiSTer recognizes the image as Apple II DSK,
+converts each requested DSK track into the same NIB byte stream, and
+converts dirty NIB tracks back into DSK sectors on writeback. The Oric
+core does not contain a `.dsk` parser.
 
 `floppy_track.sv` provides the per-drive track buffers. It loads the
 requested track through the HPS block interface, exposes the byte stream
@@ -146,6 +155,16 @@ The launcher used for hardware validation is:
 </mistergamedescription>
 ```
 
+The `.dsk` launcher uses the same flow with the raw DSK image:
+
+```xml
+<mistergamedescription>
+  <rbf>_Aoric/Oric</rbf>
+  <file delay="2" type="s" index="0" path="/media/usb0/games/Oric/dsk/231.dsk" />
+  <reset delay="1" hold="1" />
+</mistergamedescription>
+```
+
 The deployed test flow was:
 
 1. Build and deploy the core with `./tools/oric-build`.
@@ -156,8 +175,9 @@ The deployed test flow was:
 
 ## Current Limits
 
-- `.nib` is the validated format for the Pravetz FDC path.
-- HPS-side `.dsk` to `.nib` conversion is not part of this core logic.
+- `.nib` is the validated raw format for the Pravetz FDC path.
+- `.dsk` support depends on Main MiSTer exposing Oric `.dsk` mounts
+  through the Apple II DSK conversion path.
 - The hardware smoke test validated the DOS boot/read path. A separate
   write-persistence test is still needed.
 - Snapshot save/restore of live Pravetz FDC state is not implemented.
