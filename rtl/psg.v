@@ -31,7 +31,12 @@ module psg
 	input  wire[ 3:0] snap_addr,
 	input  wire[ 7:0] snap_data,
 	input  wire       snap_creg_we,
-	input  wire[ 3:0] snap_creg
+	input  wire[ 3:0] snap_creg,
+
+	// Snapshot register capture: 15 AY registers (R0..R14) packed as
+	// regs_out[8*i+:8] = R(i). creg_out mirrors the address latch.
+	output wire[119:0] regs_out,
+	output wire[  3:0] creg_out
 );
 //-------------------------------------------------------------------------------------------------
 
@@ -44,7 +49,7 @@ localparam ADDRMASK = 4'b0000;
 // 1    1   wr addr
 
 reg[3:0] addr;
-always @(posedge clock, negedge reset) 
+always @(posedge clock, negedge reset)
 	if(!reset) addr <= 1'd0;
 	else if(snap_creg_we) addr <= snap_creg;
 	else if(ce) if(bdir && bc1 && d[7:4] == ADDRMASK) addr <= d[3:0];
@@ -93,7 +98,7 @@ reg a_mode, b_mode, c_mode;
 reg a_data_io, b_data_io;
 reg e_hold, e_alternate, e_attack, e_continue;
 
-always @(posedge clock, negedge reset) 
+always @(posedge clock, negedge reset)
 	if(!reset) begin
 		a_data <= 1'd0;
 		b_data <= 1'd0;
@@ -317,6 +322,24 @@ assign  iobq = b_data;
 //end
 
 assign mix = { 2'd0, a }+{ 2'd0, b }+{ 2'd0, c };
+
+// Snapshot register capture (mirrors snap_we encoding).
+assign regs_out[  7:  0] = a_period[7:0];
+assign regs_out[ 15:  8] = { 4'd0, a_period[11:8] };
+assign regs_out[ 23: 16] = b_period[7:0];
+assign regs_out[ 31: 24] = { 4'd0, b_period[11:8] };
+assign regs_out[ 39: 32] = c_period[7:0];
+assign regs_out[ 47: 40] = { 4'd0, c_period[11:8] };
+assign regs_out[ 55: 48] = { 3'd0, n_period };
+assign regs_out[ 63: 56] = { b_data_io, a_data_io, c_mix_noise, b_mix_noise, a_mix_noise, c_enable, b_enable, a_enable };
+assign regs_out[ 71: 64] = { 3'd0, a_mode, a_level };
+assign regs_out[ 79: 72] = { 3'd0, b_mode, b_level };
+assign regs_out[ 87: 80] = { 3'd0, c_mode, c_level };
+assign regs_out[ 95: 88] = e_period[7:0];
+assign regs_out[103: 96] = e_period[15:8];
+assign regs_out[111:104] = { 4'd0, e_continue, e_attack, e_alternate, e_hold };
+assign regs_out[119:112] = a_data;
+assign creg_out = addr;
 
 //-------------------------------------------------------------------------------------------------
 endmodule

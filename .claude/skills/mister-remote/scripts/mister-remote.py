@@ -562,7 +562,10 @@ def build_parser():
     s.add_argument("--delay", type=float, default=0.05, help="seconds between keys (default 0.05)")
     s.set_defaults(func=cmd_keys)
 
-    sub.add_parser("reset-core", help="POST /controls/keyboard/reset (alias for `key reset`)").set_defaults(func=cmd_reset_core)
+    sub.add_parser(
+        "reset-core",
+        help="POST /controls/keyboard/reset (alias for `key reset`; not a guaranteed cold core restart)",
+    ).set_defaults(func=cmd_reset_core)
 
     # Screenshots
     sub.add_parser("screenshot", help="POST /screenshots (capture)").set_defaults(func=cmd_screenshot)

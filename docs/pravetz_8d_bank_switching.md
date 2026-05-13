@@ -51,37 +51,39 @@ and write it into `$C000-$FFFF`.
 
 ## Current POC Behavior
 
-The POC maps synthetic bank ROM bytes at `$0320-$03FF` when the selected
-machine ROM is Pravetz 8D.
+The POC maps the original 8D FDC controller ROM bytes at `$0320-$03FF`
+when the selected machine ROM is Pravetz 8D.
 
-BANK0 test:
+The byte source is `8D-FDC_ROM.bin` / Oricutron `8dos2.rom`, SHA-256:
 
-```basic
-POKE 896,0
-CALL 800
+```text
+f34606ddeea2b888f20c111fd107e1a9951df63fc9f47feace1bfb24be642b77
 ```
 
-`896` decimal is `$0380`; `800` decimal is `$0320`. The BANK0 ROM writes
-`BANK0` on the status row and returns to BASIC.
+The mapped banks are:
 
-BANK1 test:
+| Runtime window | EPROM source | Role |
+| -------------- | ------------ | ---- |
+| BANK0 `$0320-$03FF` | offsets `$020-$0FF` | boot stub and DOS dispatch thunks |
+| BANK1 `$0320-$03FF` | offsets `$120-$1FF` | RWTS read-sector routine |
 
-```basic
-POKE 898,0
-CALL 800
-```
+The original BANK0 boot stub at `$0320` copies a six-byte trampoline to
+`$02EA-$02EF`, then runs it. The trampoline writes `$0382` to select
+BANK1 and jumps back to `$0320`.
 
-`898` decimal is `$0382`. The BANK1 ROM does the following:
+The original BANK1 code is the disk read-sector routine. It expects a
+real Pravetz / Apple Disk II-style byte stream from the `$0310-$031F`
+controller softswitches, especially `$031C`. That byte stream is not
+implemented by this POC yet.
 
-1. Writes `P1` on the status row.
-2. Copies the visible Pravetz ROM from `$C000-$FFFF` to `$5800-$97FF`.
-3. Patches the copied prompt bytes at `$5BB4-$5BB8` to `BANK1`.
-4. Writes `P2` on the status row.
-5. Writes `$0383`, selecting bank 1 plus overlay RAM.
-6. Copies `$5800-$97FF` to overlay RAM at `$C000-$FFFF`.
-7. Jumps back through the Pravetz BASIC return path at `$C4A8`.
+As a result, `CALL 800` now enters the original firmware path. Until the
+FDC byte stream exists, reaching BANK1 is expected to stall in the
+read-sector routine rather than print the old synthetic `BANK0` /
+`BANK1` proof strings.
 
-The expected visible result is a normal BASIC prompt changed to `BANK1`.
+The remaining proof surface at this stage is byte-for-byte ROM identity
+and correct `$0380-$0383` bank / overlay latching, not successful DOS
+boot.
 
 ## Scratch Buffer Choice
 
@@ -101,7 +103,7 @@ corruption during validation.
 
 ## Validation Notes
 
-Hardware smoke tests on MiSTer verified:
+Hardware smoke tests on MiSTer previously verified the synthetic ROM POC:
 
 - Pravetz 8D boots as the default ROM selection.
 - BANK0: `POKE 896,0 : CALL 800` writes `BANK0` and returns to BASIC.
@@ -110,6 +112,9 @@ Hardware smoke tests on MiSTer verified:
 
 The build used for validation closed timing with positive setup and hold
 slack.
+
+Those visible `BANK0` / `BANK1` tests no longer apply after replacing the
+synthetic ROM with the original FDC banks.
 
 ## Open Work
 

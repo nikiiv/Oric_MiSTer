@@ -180,8 +180,12 @@ assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0; 
- 
+// DDRAM_CLK must be fast enough for the HPS DDR bridge. Using clk_sys
+// (24 MHz), and later CLK_VIDEO (48 MHz), made the ULA pixel stream lose
+// the rightmost character cells. Keep DDRAM on its own faster PLL output so
+// the save-state bridge cannot disturb the ULA/video cadence.
+assign DDRAM_CLK = clk_ddram;
+
 assign LED_USER    = ioctl_download | fdd_busy | tape_adc_act | led_user_pokeable;
 assign LED_DISK    = led_disk;
 assign LED_POWER   = 0;
@@ -211,10 +215,14 @@ video_freak video_freak
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"Oric;;",
-	"F1,TAP,Load TAP file;",
-	"F4,SNA,Load Snapshot;",
+	"Oric;SS30000000:14000;",
+	"FS1,TAP,Load TAP file;",
+	"FS4,SNASS,Load Snapshot;",
 	"h0T[53],Rewind Tape;",
+	"-;",
+	"O[125:124],Savestate Slot,1,2,3,4;",
+	"T[126],Save state(Alt+F1-F4);",
+	"T[127],Load state(F1-F4);",
 	"-;",
 	"S0,DSK,Mount Drive A:;",
 	"S1,DSK,Mount Drive B:;",
@@ -270,6 +278,7 @@ wire       named_cload_rewind_en = ~status[60]; // menu shows On (default) / Off
 
 wire locked;
 wire clk_sys;
+wire clk_ddram;
 
 pll pll
 (
@@ -277,6 +286,7 @@ pll pll
 	.rst(0),
 	.outclk_0(clk_sys),
 	.outclk_1(CLK_VIDEO),
+	.outclk_2(clk_ddram),
 	.locked(locked)
 );
 
@@ -334,7 +344,7 @@ wire   [7:0] ioctl_dout;
 wire         ioctl_download;
 wire   [7:0] ioctl_index;
 wire         load_tape = ioctl_index==1;
-wire         load_sna  = ioctl_index==4;
+wire         load_sna  = ioctl_index==4;    // accepts both .sna and .ss (snap_loader auto-detects format)
 reg          ioctl_downlD;
 
 wire         status_set;
@@ -460,6 +470,15 @@ wire  [7:0] tap_byte_data;
 wire        snap_active;
 wire [FILE_CACHE_ADDR_WIDTH-1:0] snap_cache_addr;
 
+// Savestate save/load (DDRAM-backed). save_active and load_active
+// halt the CPU and gate the spram / filecache write muxes below.
+wire        save_active;
+wire        load_active;
+wire [15:0] save_ram_addr;
+wire [1:0]  ss_slot;
+wire        ss_save;
+wire        ss_load;
+
 wire [15:0] ram_ad;
 wire [15:0] spram_addr;
 wire  [7:0] ram_d;
@@ -478,6 +497,12 @@ always @(posedge clk_sys) begin
 		spram_d <= snap_ram_data;
 		spram_addr <= snap_ram_addr;
 		spram_we <= snap_ram_we;
+	end
+	else if (save_active) begin
+		// snap_saver is read-only against the main RAM.
+		spram_d <= 8'h00;
+		spram_addr <= save_ram_addr;
+		spram_we <= 1'b0;
 	end
 	else if (tap_active) begin
 		spram_d <= tap_ram_data;
@@ -502,6 +527,19 @@ spram #(.address_width(16)) ram (
 
 wire        led_disk;
 reg         fdd_busy;
+
+// State outputs from oricatmos (driven by chip RTL via passthrough ports).
+// Declared before the instance so multi-bit nets aren't synthesized as
+// implicit 1-bit wires by Verilog.
+wire [63:0]  cpu_regs_out;
+wire  [7:0]  via_orb_out, via_ora_out, via_ddrb_out, via_ddra_out;
+wire  [7:0]  via_t1l_l_out, via_t1l_h_out, via_t2l_l_out, via_t2l_h_out;
+wire  [7:0]  via_sr_out, via_acr_out, via_pcr_out, via_ier_out, via_ifr_out;
+wire [15:0]  via_t1c_out, via_t2c_out;
+wire         via_t1_active_out, via_t2_active_out;
+wire [119:0] ay_regs_out;
+wire  [3:0]  ay_creg_out;
+wire  [2:0]  ula_mode_out;
 
 oricatmos oricatmos
 (
@@ -566,7 +604,7 @@ oricatmos oricatmos
 	.sd_din_fd3       (sd_buff_din[3]),
 	.sd_dout_strobe   (sd_buff_wr),
 	.sd_din_strobe    (0),
-	.cpu_halt         (snap_active | tap_active | tap_byte_active),
+	.cpu_halt         (snap_active | tap_active | tap_byte_active | save_active | load_active),
 	.cpu_regs_set     (cpu_regs_set),
 	.cpu_regs_set_we  (cpu_regs_set_we),
 	.via_snap_we      (via_snap_we),
@@ -588,6 +626,27 @@ oricatmos oricatmos
 	.ay_snap_creg     (ay_snap_creg),
 	.ula_snap_mode_we (ula_snap_mode_we),
 	.ula_snap_mode    (ula_snap_mode),
+	.cpu_regs_out       (cpu_regs_out),
+	.via_orb_out        (via_orb_out),
+	.via_ora_out        (via_ora_out),
+	.via_ddrb_out       (via_ddrb_out),
+	.via_ddra_out       (via_ddra_out),
+	.via_t1l_l_out      (via_t1l_l_out),
+	.via_t1l_h_out      (via_t1l_h_out),
+	.via_t2l_l_out      (via_t2l_l_out),
+	.via_t2l_h_out      (via_t2l_h_out),
+	.via_sr_out         (via_sr_out),
+	.via_acr_out        (via_acr_out),
+	.via_pcr_out        (via_pcr_out),
+	.via_ier_out        (via_ier_out),
+	.via_ifr_out        (via_ifr_out),
+	.via_t1c_out        (via_t1c_out),
+	.via_t2c_out        (via_t2c_out),
+	.via_t1_active_out  (via_t1_active_out),
+	.via_t2_active_out  (via_t2_active_out),
+	.ay_regs_out        (ay_regs_out),
+	.ay_creg_out        (ay_creg_out),
+	.ula_mode_out       (ula_mode_out),
 	.patch_active     (cload_patch_active),
 	.patch_data       (cload_patch_data),
 	.c000_we          (c000_we),
@@ -713,7 +772,18 @@ wire [FILE_CACHE_ADDR_WIDTH-1:0] file_download_last =
   load_tape ? TAP_CACHE_LAST : FILE_CACHE_LAST;
 wire [FILE_CACHE_ADDR_WIDTH-1:0] file_download_addr =
   file_download_in_range ? ioctl_addr[FILE_CACHE_ADDR_WIDTH-1:0] : file_download_last;
+
+// Filecache write-port mux: DDRAM->SPRAM DMA (slot-load preamble) takes
+// priority over host downloads. snap_loader / cassette / tap consumers
+// observe filecache_q through the read-address mux below.
+wire        ddma_fc_we;
+wire [17:0] ddma_fc_addr;
+wire  [7:0] ddma_fc_data;
+wire        ddma_trigger;
+wire [17:0] ddma_snap_end;
+
 wire [FILE_CACHE_ADDR_WIDTH-1:0] file_selected_addr =
+  ddma_fc_we           ? ddma_fc_addr :
   file_download_active ? file_download_addr :
   snap_active          ? snap_cache_addr :
   tap_active           ? tap_cache_addr :
@@ -722,12 +792,16 @@ wire [FILE_CACHE_ADDR_WIDTH-1:0] file_selected_addr =
 wire [FILE_CACHE_ADDR_WIDTH-1:0] filecache_addr =
   (file_selected_addr > FILE_CACHE_LAST) ? FILE_CACHE_LAST : file_selected_addr;
 
+wire [7:0] filecache_write_data = ddma_fc_we ? ddma_fc_data : ioctl_dout;
+wire       filecache_write_we   = ddma_fc_we |
+                                  (ioctl_wr && (load_tape || load_sna) && file_download_in_range);
+
 spram #(.address_width(FILE_CACHE_ADDR_WIDTH), .numwords(FILE_CACHE_NUMWORDS)) filecache (
   .clock(clk_sys),
 
   .address(filecache_addr),
-  .data(ioctl_dout),
-  .wren(ioctl_wr && (load_tape || load_sna) && file_download_in_range),
+  .data(filecache_write_data),
+  .wren(filecache_write_we),
   .q(filecache_q)
 );
 
@@ -735,6 +809,7 @@ spram #(.address_width(FILE_CACHE_ADDR_WIDTH), .numwords(FILE_CACHE_NUMWORDS)) f
 always @(posedge clk_sys) begin
 	if (load_tape && ioctl_download) tape_end <= file_download_addr;
 	if (load_sna && ioctl_download) snap_end <= file_download_addr;
+	if (ddma_trigger) snap_end <= ddma_snap_end;
 end
 
 always @(posedge clk_sys) begin
@@ -858,6 +933,7 @@ snap_loader snap_loader (
 	.ioctl_download  (ioctl_download),
 	.ioctl_downlD    (ioctl_downlD),
 	.load_sna        (load_sna),
+	.ext_trigger     (ddma_trigger),
 	.snap_end        (snap_end),
 	.snap_cache_addr (snap_cache_addr),
 	.snap_cache_q    (snap_cache_q),
@@ -899,5 +975,148 @@ ltc2308_tape ltc2308_tape
 );
 
 assign tape_in = tapeUseADC ? tape_adc : casdout;
+
+///////////////////////////////////////////////////
+// Save-state UI: keyboard (F1-F4 / Alt+F1-F4) and OSD triggers.
+wire [1:0] osd_saveload = {status[127], status[126]};
+wire [1:0] status_ss_slot = status[125:124];
+
+savestate_ui ss_ui (
+	.clk           (clk_sys),
+	.ps2_key       (ps2_key),
+	.allow_ss      (~ioctl_download & ~snap_active & ~save_active & ~load_active),
+	.status_slot   (status_ss_slot),
+	.OSD_saveload  (osd_saveload),
+	.ss_save       (ss_save),
+	.ss_load       (ss_load),
+	.selected_slot (ss_slot)
+);
+
+// DDRAM (HPS shared DRAM) — single read/write channel arbitrated below.
+// The controller runs in clk_ddram (96 MHz) so the HPS bridge stays
+// happy. ch1_ready from there is a 1-cycle pulse at 96 MHz — too short
+// for clk_sys (24 MHz) to sample reliably, so we cross it via a toggle
+// + 2-FF sync + edge detect (ch1_ready_sync below).
+wire [27:1] ch1_addr;
+wire [63:0] ch1_din;
+wire  [7:0] ch1_be;
+wire        ch1_rnw;
+wire        ch1_req;
+wire [63:0] ch1_dout;
+wire        ch1_ready;
+
+ddram ddram_inst (
+	.DDRAM_CLK       (clk_ddram),
+	.DDRAM_BUSY      (DDRAM_BUSY),
+	.DDRAM_BURSTCNT  (DDRAM_BURSTCNT),
+	.DDRAM_ADDR      (DDRAM_ADDR),
+	.DDRAM_DOUT      (DDRAM_DOUT),
+	.DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+	.DDRAM_RD        (DDRAM_RD),
+	.DDRAM_DIN       (DDRAM_DIN),
+	.DDRAM_BE        (DDRAM_BE),
+	.DDRAM_WE        (DDRAM_WE),
+
+	.ch1_addr        (ch1_addr),
+	.ch1_dout        (ch1_dout),
+	.ch1_din         (ch1_din),
+	.ch1_req         (ch1_req),
+	.ch1_rnw         (ch1_rnw),
+	.ch1_be          (ch1_be),
+	.ch1_ready       (ch1_ready)
+);
+
+// No CDC synchronizer needed: snap_saver and snap_load_ddma hold ch1_req
+// asserted until they observe ch1_ready, and ddram performs idempotent
+// retries while the req is held. The narrow clk_ddram ready pulse
+// keeps re-firing each CLK_VIDEO cycle until our 24 MHz client samples
+// one on an aligned edge. ch1_dout is a stable register in CLK_VIDEO
+// (ram_q[1]) so sampling it alongside ch1_ready is safe.
+
+// Save-side ch1 driver: snap_saver writes the .sna bytes into the slot.
+wire [27:1] ss_ch1_addr;
+wire [63:0] ss_ch1_din;
+wire  [7:0] ss_ch1_be;
+wire        ss_ch1_rnw;
+wire        ss_ch1_req;
+
+snap_saver snap_saver (
+	.clk_sys     (clk_sys),
+	.reset       (reset),
+	.ss_save     (ss_save),
+	.ss_slot     (ss_slot),
+
+	.cpu_regs_in  (cpu_regs_out),
+	.via_orb_in   (via_orb_out),
+	.via_ora_in   (via_ora_out),
+	.via_ddrb_in  (via_ddrb_out),
+	.via_ddra_in  (via_ddra_out),
+	.via_t1l_l_in (via_t1l_l_out),
+	.via_t1l_h_in (via_t1l_h_out),
+	.via_t2l_l_in (via_t2l_l_out),
+	.via_t2l_h_in (via_t2l_h_out),
+	.via_sr_in    (via_sr_out),
+	.via_acr_in   (via_acr_out),
+	.via_pcr_in   (via_pcr_out),
+	.via_ier_in   (via_ier_out),
+	.via_ifr_in   (via_ifr_out),
+	.via_t1c_in   (via_t1c_out),
+	.via_t2c_in   (via_t2c_out),
+	.via_t1_active_in (via_t1_active_out),
+	.via_t2_active_in (via_t2_active_out),
+	.ay_regs_in   (ay_regs_out),
+	.ay_creg_in   (ay_creg_out),
+	.ula_mode_in  (ula_mode_out),
+
+	.ram_addr     (save_ram_addr),
+	.ram_q        (ram_q),
+
+	.active       (save_active),
+
+	.ch1_addr     (ss_ch1_addr),
+	.ch1_din      (ss_ch1_din),
+	.ch1_be       (ss_ch1_be),
+	.ch1_rnw      (ss_ch1_rnw),
+	.ch1_req      (ss_ch1_req),
+	.ch1_ready    (ch1_ready)
+);
+
+// Load-side ch1 driver: snap_load_ddma reads the slot, fills the filecache,
+// and then pulses ddma_trigger so the existing snap_loader runs.
+wire [27:1] ld_ch1_addr;
+wire [63:0] ld_ch1_din;
+wire  [7:0] ld_ch1_be;
+wire        ld_ch1_rnw;
+wire        ld_ch1_req;
+
+snap_load_ddma snap_load_ddma (
+	.clk_sys      (clk_sys),
+	.reset        (reset),
+	.ss_load      (ss_load),
+	.ss_slot      (ss_slot),
+
+	.ch1_addr     (ld_ch1_addr),
+	.ch1_din      (ld_ch1_din),
+	.ch1_be       (ld_ch1_be),
+	.ch1_rnw      (ld_ch1_rnw),
+	.ch1_req      (ld_ch1_req),
+	.ch1_dout     (ch1_dout),
+	.ch1_ready    (ch1_ready),
+
+	.fc_we        (ddma_fc_we),
+	.fc_addr      (ddma_fc_addr),
+	.fc_data      (ddma_fc_data),
+
+	.active       (load_active),
+	.snap_end_out (ddma_snap_end),
+	.trigger_out  (ddma_trigger)
+);
+
+// ch1 mux: load takes precedence (no concurrent save/load).
+assign ch1_addr = load_active ? ld_ch1_addr : ss_ch1_addr;
+assign ch1_din  = load_active ? ld_ch1_din  : ss_ch1_din;
+assign ch1_be   = load_active ? ld_ch1_be   : ss_ch1_be;
+assign ch1_rnw  = load_active ? ld_ch1_rnw  : ss_ch1_rnw;
+assign ch1_req  = load_active ? ld_ch1_req  : ss_ch1_req;
 
 endmodule

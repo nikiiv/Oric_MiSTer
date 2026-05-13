@@ -101,6 +101,7 @@ port (
 
 	SNAP_MODE_WE : in  std_logic := '0';
 	SNAP_MODE    : in  std_logic_vector(2 downto 0) := (others => '0');
+	SNAP_MODE_OUT : out std_logic_vector(2 downto 0);
 
 	-- DRAM
 --	AD_RAM     :   out std_logic_vector( 7 downto 0); -- ADDRESS BUS for dynamic ram  -- pin 38,36,37,4,3,2,40,39
@@ -219,6 +220,7 @@ begin
 	CLK_24       <= CLK;
 	RESET_INT    <= not RESETn;
 	lMAPn        <= MAPn;
+	SNAP_MODE_OUT <= lREG_MODE;
 	RW_INT       <= RW;
 
 	-- output assignments

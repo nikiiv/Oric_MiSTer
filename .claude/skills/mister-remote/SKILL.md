@@ -1,6 +1,6 @@
 ---
 name: mister-remote
-description: Drive a MiSTer FPGA over its mrext Remote HTTP API (default mister.local:8182). Use when the user asks to launch a core/game on the MiSTer, send keystrokes, take or download a screenshot, reset the running core, reboot the MiSTer, browse files on the device, search the games index, manage wallpapers, control the music player, run scripts, or read/write MiSTer.ini settings. Wraps the wizzomafizzo/mrext remote API.
+description: Drive a MiSTer FPGA over its mrext Remote HTTP API (default mister.local:8182). Use when the user asks to launch a core/game on the MiSTer, send keystrokes, take or download a screenshot, send the MiSTer reset key, reboot the MiSTer, browse files on the device, search the games index, manage wallpapers, control the music player, run scripts, or read/write MiSTer.ini settings. Wraps the wizzomafizzo/mrext remote API.
 ---
 
 # mister-remote
@@ -16,7 +16,7 @@ Trigger phrases:
 - "press menu / osd / arrow / reset on the mister"
 - "send these keystrokes to the mister"
 - "take a screenshot from the mister" / "download the latest screenshot"
-- "reset the (mister) core"
+- "reset the (mister) core" / "send reset"
 - "reboot the mister"
 - "list / browse cores in /media/fat/..."
 - "search the mister games index for X"
@@ -86,7 +86,7 @@ JSON-returning commands print pretty JSON on stdout. Errors go to stderr with a 
 | `key <name>` | `POST /controls/keyboard/{name}` | one named keystroke (validated client-side) |
 | `key-raw <code>` | `POST /controls/keyboard-raw/{code}` | raw uinput key code |
 | `keys <n1> <n2> ...` | (loop over `key`) | sequence of named keys with `--delay` between |
-| `reset-core` | `POST /controls/keyboard/reset` | reset only the running core (alias for `key reset`) |
+| `reset-core` | `POST /controls/keyboard/reset` | send MiSTer's reset key (alias for `key reset`); this is not a guaranteed cold core restart |
 
 ### Screenshots
 
@@ -170,11 +170,21 @@ computer_osd
 
 Most useful: `reset`, `osd`, `menu`, `screenshot`, arrow keys, `confirm`/`cancel`. Unknown names are rejected client-side.
 
-## Reset semantics
+## Reset Semantics
+
+For Oric core work, treat a true cold core start as a launch of the RBF or
+MGL, not as `reset-core`. Use:
+
+```
+python3 .claude/skills/mister-remote/scripts/mister-remote.py launch /media/fat/_Aoric/Oric.rbf
+```
+
+or launch the relevant `.mgl`.
 
 | User says | Use |
 |---|---|
-| "reset the core" / "reset the oric" | `reset-core`. Restarts only the running core. Non-destructive. |
+| "cold boot the Oric core" / "start fresh" | `launch /media/fat/_Aoric/Oric.rbf` or launch the target `.mgl`. This is the reliable core cold-start path. |
+| "press reset" / "send reset" | `reset-core` or `key reset`. Sends MiSTer's reset key; depending on the running context it may leave the core and return to MENU. |
 | "soft reset to menu" / "exit core" | `launch-menu`. Drops back to the MiSTer main menu without rebooting. |
 | "reboot mister" / "restart the mister" | `reboot --yes`. Full system restart. **Confirm with the user first.** |
 | "restart the remote service" | `settings-remote-restart --yes`. Bounces only the Remote daemon (~5 s API outage). |
@@ -220,7 +230,7 @@ Oric `.dsk` images live at `/media/usb0/games/Oric/dsk/` (USB, not SD). Examples
 ```
 ... launch-game /media/usb0/games/Oric/dsk/Cobra-Pinball.dsk
 ... launch-system Oric             # boot Oric core to BASIC, no media
-... launch /media/fat/_Aoric/Oric.rbf   # boot a specific dev RBF
+... launch /media/fat/_Aoric/Oric.rbf   # cold boot a specific dev RBF
 ```
 
 ## Error recovery
