@@ -32,10 +32,10 @@ communication between the emulated 6502 and the FPGA core.
   implementation from `snapshot.c`. It is the producer/consumer format
   reference for block IDs, big-endian fields, save order, load order, optional
   blocks, and how Oricutron attaches `DATA` chunks.
-- `pravetz_8d_bank_switching.md` documents the current Pravetz 8D page-3
-  bank-switching proof of concept: `$0320-$03FF` controller ROM window,
-  `$0380-$0383` softswitches, high-16K overlay RAM behavior, scratch-buffer
-  choice, and MiSTer validation results.
+- `pravetz_8d_fdc.md` documents the current Pravetz 8D FDC implementation:
+  Apple II Disk II softswitches at `$0310-$031F`, BANK0/BANK1 controller ROM
+  mapping at `$0320-$03FF`, `$0380-$0383` bank/shadow latches, `.nib` image
+  handling, and MiSTer validation notes.
 
 ## Oric reference material
 

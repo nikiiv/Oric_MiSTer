@@ -464,11 +464,12 @@ a Telestrat or RTC on `#0360`. Any code that conditionally probes
 `#320` for `$78` is doing the same FDD-detection trick as
 `pravetzd.rom`.
 
-Implementation note: the current MiSTer proof of concept is documented
-in `pravetz_8d_bank_switching.md`. The important modelling point is
-that the `$0380-$0383` softswitch latches bank and overlay state, but
-overlay RAM must only replace the high `$C000-$FFFF` ROM window. Low
-RAM and page 3 remain accessible while the overlay is selected.
+Implementation note: the current MiSTer FDC implementation is documented
+in `pravetz_8d_fdc.md`. The important modelling points are that
+`$0310-$031F` behaves like the Apple II Disk II softswitch window, and
+that the `$0380-$0383` softswitch latches bank and overlay state while
+overlay RAM only replaces the high `$C000-$FFFF` ROM window. Low RAM and
+page 3 remain accessible while the overlay is selected.
 
 ## 6. Page 4 — `$0400-$04FF`
 
