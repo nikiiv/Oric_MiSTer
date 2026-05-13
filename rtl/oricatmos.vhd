@@ -260,7 +260,6 @@ ARCHITECTURE RTL OF oricatmos IS
 	-- Disk controller
 	SIGNAL cont_MAPn : STD_LOGIC := '1';
 	SIGNAL cont_ROMDISn : STD_LOGIC := '1';
-	SIGNAL cont_D_OUT : STD_LOGIC_VECTOR(7 DOWNTO 0);
 	SIGNAL cont_IOCONTROLn : STD_LOGIC := '1';
 	SIGNAL cont_ECE : STD_LOGIC;
 	SIGNAL cont_RESETn : STD_LOGIC;
@@ -273,10 +272,34 @@ ARCHITECTURE RTL OF oricatmos IS
 	SIGNAL md_RESETn : STD_LOGIC := '1';
 	SIGNAL md_nOE : STD_LOGIC := '1';
 	SIGNAL md_irq : STD_LOGIC := '1';
+	SIGNAL md_D_OUT : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL md_sd_lba_fd0 : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL md_sd_lba_fd1 : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL md_sd_lba_fd2 : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL md_sd_lba_fd3 : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL md_sd_rd : STD_LOGIC_VECTOR(3 DOWNTO 0);
+	SIGNAL md_sd_wr : STD_LOGIC_VECTOR(3 DOWNTO 0);
+	SIGNAL md_sd_din_fd0 : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL md_sd_din_fd1 : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL md_sd_din_fd2 : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL md_sd_din_fd3 : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL md_fdd_busy : STD_LOGIC;
+	SIGNAL md_fd_led : STD_LOGIC;
 	SIGNAL pravetz_mode : STD_LOGIC;
 	SIGNAL pravetz_bank : STD_LOGIC := '0';
 	SIGNAL pravetz_shadow : STD_LOGIC := '0';
+	SIGNAL pravetz_extension_window : STD_LOGIC;
 	SIGNAL pravetz_bank_window : STD_LOGIC;
+	SIGNAL pravetz_fdc_DO : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL pravetz_fdc_select : STD_LOGIC;
+	SIGNAL pravetz_sd_lba_fd0 : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL pravetz_sd_lba_fd1 : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL pravetz_sd_rd : STD_LOGIC_VECTOR(1 DOWNTO 0);
+	SIGNAL pravetz_sd_wr : STD_LOGIC_VECTOR(1 DOWNTO 0);
+	SIGNAL pravetz_sd_din_fd0 : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL pravetz_sd_din_fd1 : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL pravetz_fdd_busy : STD_LOGIC;
+	SIGNAL pravetz_fd_led : STD_LOGIC;
 
 
 	-- Controller derived clocks
@@ -351,6 +374,10 @@ BEGIN
 
 	RESETn <= (NOT RESET AND KEYB_RESETn);
 	pravetz_mode <= '1' WHEN rom = "10" ELSE '0';
+	pravetz_extension_window <= '1' WHEN pravetz_mode = '1'
+	                                  AND cpu_ad(15 DOWNTO 8) = X"03"
+	                                  AND unsigned(cpu_ad(7 DOWNTO 0)) >= TO_UNSIGNED(16#10#, 8)
+	                             ELSE '0';
 	pravetz_bank_window <= '1' WHEN pravetz_mode = '1'
 	                         AND cpu_ad(15 DOWNTO 8) = X"03"
 	                         AND unsigned(cpu_ad(7 DOWNTO 0)) >= TO_UNSIGNED(16#20#, 8)
@@ -364,11 +391,25 @@ BEGIN
 	cont_ROMDISn <= '0' WHEN pravetz_mode = '1' AND pravetz_shadow = '1' ELSE
 	                '1' WHEN pravetz_mode = '1' ELSE
 	                md_ROMDISn;
-	cont_IOCONTROLn <= '1' WHEN pravetz_mode = '1' ELSE md_IOCONTROLn;
+	cont_IOCONTROLn <= '0' WHEN pravetz_extension_window = '1' ELSE
+	                   '1' WHEN pravetz_mode = '1' ELSE
+	                   md_IOCONTROLn;
 	cont_ECE <= '1' WHEN pravetz_mode = '1' ELSE md_ECE;
 	cont_RESETn <= md_RESETn;
 	cont_nOE <= '1' WHEN pravetz_mode = '1' ELSE md_nOE;
 	cont_irq <= '1' WHEN pravetz_mode = '1' ELSE md_irq;
+	sd_lba_fd0 <= pravetz_sd_lba_fd0 WHEN pravetz_mode = '1' ELSE md_sd_lba_fd0;
+	sd_lba_fd1 <= pravetz_sd_lba_fd1 WHEN pravetz_mode = '1' ELSE md_sd_lba_fd1;
+	sd_lba_fd2 <= (OTHERS => '0') WHEN pravetz_mode = '1' ELSE md_sd_lba_fd2;
+	sd_lba_fd3 <= (OTHERS => '0') WHEN pravetz_mode = '1' ELSE md_sd_lba_fd3;
+	sd_rd <= "00" & pravetz_sd_rd WHEN pravetz_mode = '1' ELSE md_sd_rd;
+	sd_wr <= "00" & pravetz_sd_wr WHEN pravetz_mode = '1' ELSE md_sd_wr;
+	sd_din_fd0 <= pravetz_sd_din_fd0 WHEN pravetz_mode = '1' ELSE md_sd_din_fd0;
+	sd_din_fd1 <= pravetz_sd_din_fd1 WHEN pravetz_mode = '1' ELSE md_sd_din_fd1;
+	sd_din_fd2 <= (OTHERS => '0') WHEN pravetz_mode = '1' ELSE md_sd_din_fd2;
+	sd_din_fd3 <= (OTHERS => '0') WHEN pravetz_mode = '1' ELSE md_sd_din_fd3;
+	fdd_busy <= pravetz_fdd_busy WHEN pravetz_mode = '1' ELSE md_fdd_busy;
+	fd_led <= pravetz_fd_led WHEN pravetz_mode = '1' ELSE md_fd_led;
 
 	inst_cpu : ENTITY work.T65
 		PORT MAP(
@@ -604,12 +645,38 @@ BEGIN
 	KEYB_NMIn <= NOT swnmi;
 	KEYB_RESETn <= NOT swrst;
 
+	inst_pravetz_fdc : ENTITY work.PRAVETZ8D_FDC_CTRL
+	PORT MAP(
+		clk_sys => CLK_IN,
+		reset => NOT RESETn,
+		phi2 => ula_PHI2,
+		A => cpu_ad(15 DOWNTO 0),
+		DI => cpu_do,
+		DO => pravetz_fdc_DO,
+		fdc_select => pravetz_fdc_select,
+		img_mounted => img_mounted,
+		img_wp => img_wp,
+		img_size => img_size,
+		sd_lba_fd0 => pravetz_sd_lba_fd0,
+		sd_lba_fd1 => pravetz_sd_lba_fd1,
+		sd_rd => pravetz_sd_rd,
+		sd_wr => pravetz_sd_wr,
+		sd_ack => sd_ack(1 DOWNTO 0),
+		sd_buff_addr => sd_buff_addr,
+		sd_dout => sd_dout,
+		sd_din_fd0 => pravetz_sd_din_fd0,
+		sd_din_fd1 => pravetz_sd_din_fd1,
+		sd_dout_strobe => sd_dout_strobe,
+		fdd_busy => pravetz_fdd_busy,
+		fd_led => pravetz_fd_led
+	);
+
 	inst_microdisc : work.Microdisc
 	PORT MAP(
 		CLK_SYS => CLK_IN,
 		-- Oric Expansion Port Signals
 		DI => cpu_do, -- 6502 Data Bus
-		DO => cont_D_OUT, -- 6502 Data Bus			 
+		DO => md_D_OUT, -- 6502 Data Bus
 		A => cpu_ad (15 DOWNTO 0), -- 6502 Address Bus
 		RnW => cpu_rw, -- 6502 Read-/Write
 		nIRQ => md_irq, -- 6502 /IRQ
@@ -634,26 +701,26 @@ BEGIN
 		img_mounted => img_mounted,
 		img_wp => img_wp,
 		img_size => img_size,
-		sd_lba_fd0 => sd_lba_fd0,
-		sd_lba_fd1 => sd_lba_fd1,
-		sd_lba_fd2 => sd_lba_fd2,
-		sd_lba_fd3 => sd_lba_fd3,
-		sd_rd => sd_rd,
-		sd_wr => sd_wr,
+		sd_lba_fd0 => md_sd_lba_fd0,
+		sd_lba_fd1 => md_sd_lba_fd1,
+		sd_lba_fd2 => md_sd_lba_fd2,
+		sd_lba_fd3 => md_sd_lba_fd3,
+		sd_rd => md_sd_rd,
+		sd_wr => md_sd_wr,
 		sd_ack => sd_ack,
 		sd_buff_addr => sd_buff_addr,
 		sd_dout => sd_dout,
-		sd_din_fd0 => sd_din_fd0,
-		sd_din_fd1 => sd_din_fd1,
-		sd_din_fd2 => sd_din_fd2,
-		sd_din_fd3 => sd_din_fd3,
+		sd_din_fd0 => md_sd_din_fd0,
+		sd_din_fd1 => md_sd_din_fd1,
+		sd_din_fd2 => md_sd_din_fd2,
+		sd_din_fd3 => md_sd_din_fd3,
 		sd_dout_strobe => sd_dout_strobe,
 		sd_din_strobe => sd_din_strobe,
 		fdd_ready => fdd_ready,
-		fdd_busy => fdd_busy,
+		fdd_busy => md_fdd_busy,
 		fdd_reset => fdd_reset,
 		fdd_layout => fdd_layout,
-		fd_led => fd_led
+		fd_led => md_fd_led
 
 	);
 
@@ -735,12 +802,15 @@ BEGIN
 		IF cpu_rw = '1' AND ula_phi2 = '1' AND patch_active = '1'
 		      AND ula_CSROMn = '0' AND cont_MAPn = '1' AND cont_ROMDISn = '1' THEN
 			cpu_di <= patch_data;
+			-- Pravetz 8D Disk II-style FDC softswitches ($0310-$031F).
+		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND pravetz_mode = '1' AND pravetz_fdc_select = '1' THEN
+			cpu_di <= pravetz_fdc_DO;
 			-- Pravetz 8D POC page-3 bank ROM ($0320-$03FF).
 		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND pravetz_bank_window = '1' THEN
 			cpu_di <= ROM_PRAVETZ_BANK_DO;
 			-- expansion port
 		ELSIF cpu_rw = '1' AND ula_PHI2 = '1' AND ula_CSIOn = '0' AND cont_IOCONTROLn = '0' THEN
-			cpu_di <= cont_D_OUT;
+			cpu_di <= md_D_OUT;
 			-- VIA
 		ELSIF cpu_rw = '1' AND ula_phi2 = '1' AND ula_CSIOn = '0' AND cont_IOCONTROLn = '1' THEN
 			cpu_di <= VIA_DO;

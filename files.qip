@@ -13,9 +13,15 @@ set_global_assignment -name VERILOG_FILE rtl/tap_segment_loader.v
 set_global_assignment -name VERILOG_FILE rtl/tap_byte_streamer.v
 set_global_assignment -name VERILOG_FILE rtl/tap_autorun_keys.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wd1793.sv
+set_global_assignment -name VHDL_FILE rtl/apple2_disk/dpram.vhd
+set_global_assignment -name VHDL_FILE rtl/apple2_disk/disk_ii_rom.vhd
+set_global_assignment -name VHDL_FILE rtl/apple2_disk/drive_ii.vhd
+set_global_assignment -name VHDL_FILE rtl/apple2_disk/disk_ii.vhd
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/apple2_disk/floppy_track.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/keyboard.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/joystick.sv
 set_global_assignment -name VHDL_FILE rtl/microdisc.vhd
+set_global_assignment -name VHDL_FILE rtl/pravetz8d_fdc.vhd
 set_global_assignment -name VHDL_FILE rtl/rom/MICRODIS.vhd
 set_global_assignment -name VHDL_FILE rtl/rom/BASIC10.vhd
 set_global_assignment -name VHDL_FILE rtl/rom/BASIC11A.vhdl
