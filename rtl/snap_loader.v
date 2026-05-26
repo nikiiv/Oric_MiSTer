@@ -26,7 +26,6 @@ module snap_loader (
 	input             ioctl_download,
 	input             ioctl_downlD,
 	input             load_sna,           // ioctl_index == 4
-	input             ext_trigger,        // alternate trigger (slot-load DMA)
 	input      [17:0] snap_end,
 	output reg [17:0] snap_cache_addr,
 	input       [7:0] snap_cache_q,
@@ -69,7 +68,7 @@ module snap_loader (
 	output reg  [2:0] ula_snap_mode
 );
 
-wire snap_trigger = (ioctl_downlD && ~ioctl_download && load_sna) || ext_trigger;
+wire snap_trigger = ioctl_downlD && ~ioctl_download && load_sna;
 
 localparam S_IDLE             = 5'd0,
            S_INIT             = 5'd1,
@@ -87,15 +86,7 @@ localparam S_IDLE             = 5'd0,
            S_DRAIN            = 5'd13,
            S_DONE             = 5'd14,
            S_DEBUG_PAINT      = 5'd15,
-           S_BLK_OSN          = 5'd16,
-           // Auto-detect file format. After S_INIT primes the read pipeline,
-           // S_PEEK examines mem[0]: if it's 'O' (start of Oricutron OSN
-           // tag) we treat the file as a raw .sna and start tag walking
-           // from byte 0. Otherwise we assume a MiSTer .ss savestate
-           // (8-byte counter+size slot header + .sna payload) and skip
-           // ahead to byte 8 via S_SS_PRIME before resuming.
-           S_PEEK             = 5'd17,
-           S_SS_PRIME         = 5'd18;
+           S_BLK_OSN          = 5'd16;
 
 reg  [4:0]  snap_state;
 reg  [1:0]  hdr_byte_cnt;
@@ -191,38 +182,9 @@ always @(posedge clk_sys) begin
 			end
 
 			// Prime filecache read pipeline. After this cycle, snap_cache_q
-			// at the next state will reflect mem[0].
+			// at S_HDR_TAG will reflect mem[0].
 			S_INIT: begin
 				snap_cache_addr <= 18'd1;
-				snap_state      <= S_PEEK;
-			end
-
-			// Peek mem[0] to decide whether this is a raw .sna (starts
-			// with 'O' from the OSN tag) or a MiSTer .ss savestate (starts
-			// with a 4-byte LE counter — first byte is whatever low byte
-			// of the counter happens to be, almost always not 0x4F).
-			S_PEEK: begin
-				if (snap_cache_q == 8'h4F /* 'O' */) begin
-					// .sna format. mem[0] is the first tag byte; record it
-					// here and let S_HDR_TAG read the remaining 3 bytes.
-					blk_tag[31:24]  <= snap_cache_q;
-					hdr_byte_cnt    <= 2'd1;
-					snap_cache_addr <= snap_cache_addr + 18'd1; // -> 2
-					snap_state      <= S_HDR_TAG;
-				end
-				else begin
-					// .ss format. Skip the 8-byte slot header — point
-					// snap_cache_addr at byte 8 so S_SS_PRIME's next
-					// cycle has q = mem[8].
-					snap_cache_addr <= 18'd8;
-					snap_state      <= S_SS_PRIME;
-				end
-			end
-
-			// One extra pipeline cycle so that when S_HDR_TAG runs, q
-			// reflects mem[8] (the first byte of the .sna payload).
-			S_SS_PRIME: begin
-				snap_cache_addr <= 18'd9;
 				hdr_byte_cnt    <= 2'd0;
 				snap_state      <= S_HDR_TAG;
 			end

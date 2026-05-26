@@ -118,26 +118,7 @@ entity M6522 is
       -- IFR restore: bit 6 = t1_irq, 5 = t2_irq, 4 = cb1, 3 = cb2,
       -- 2 = sr, 1 = ca1, 0 = ca2. Bit 7 is computed from the others.
       snap_ifr_we           : in    std_logic := '0';
-      snap_ifr_data         : in    std_logic_vector(6 downto 0) := (others => '0');
-
-      -- Snapshot register capture (for save direction).
-      snap_orb_out          : out   std_logic_vector(7 downto 0);
-      snap_ora_out          : out   std_logic_vector(7 downto 0);
-      snap_ddrb_out         : out   std_logic_vector(7 downto 0);
-      snap_ddra_out         : out   std_logic_vector(7 downto 0);
-      snap_t1l_l_out        : out   std_logic_vector(7 downto 0);
-      snap_t1l_h_out        : out   std_logic_vector(7 downto 0);
-      snap_t2l_l_out        : out   std_logic_vector(7 downto 0);
-      snap_t2l_h_out        : out   std_logic_vector(7 downto 0);
-      snap_sr_out           : out   std_logic_vector(7 downto 0);
-      snap_acr_out          : out   std_logic_vector(7 downto 0);
-      snap_pcr_out          : out   std_logic_vector(7 downto 0);
-      snap_ier_out          : out   std_logic_vector(7 downto 0);
-      snap_ifr_out          : out   std_logic_vector(7 downto 0);
-      snap_t1c_out          : out   std_logic_vector(15 downto 0);
-      snap_t2c_out          : out   std_logic_vector(15 downto 0);
-      snap_t1_active_out    : out   std_logic;
-      snap_t2_active_out    : out   std_logic
+      snap_ifr_data         : in    std_logic_vector(6 downto 0) := (others => '0')
    );
 end;
 
@@ -250,25 +231,6 @@ architecture RTL of M6522 is
 
    signal final_irq         : std_logic;
 begin
-
-   -- Snapshot register capture (combinational view of internal state).
-   snap_orb_out       <= r_orb;
-   snap_ora_out       <= r_ora;
-   snap_ddrb_out      <= r_ddrb;
-   snap_ddra_out      <= r_ddra;
-   snap_t1l_l_out     <= r_t1l_l;
-   snap_t1l_h_out     <= r_t1l_h;
-   snap_t2l_l_out     <= r_t2l_l;
-   snap_t2l_h_out     <= r_t2l_h;
-   snap_sr_out        <= r_sr;
-   snap_acr_out       <= r_acr;
-   snap_pcr_out       <= r_pcr;
-   snap_ier_out       <= '1' & r_ier;  -- ier bit 7 reads back as '1'
-   snap_ifr_out       <= r_ifr;
-   snap_t1c_out       <= t1c;
-   snap_t2c_out       <= t2c;
-   snap_t1_active_out <= '1' when t1c_active else '0';
-   snap_t2_active_out <= '1' when t2c_active else '0';
 
    p_phase : process
    begin

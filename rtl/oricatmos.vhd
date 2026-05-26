@@ -130,30 +130,6 @@ ENTITY oricatmos IS
 		ula_snap_mode_we : IN STD_LOGIC := '0';
 		ula_snap_mode   : IN STD_LOGIC_VECTOR(2 DOWNTO 0) := (OTHERS => '0');
 
-		-- Snapshot SAVE direction: combinational read-back of internal chip state.
-		-- cpu_regs_out is T65's packed {PC[15:0], S[15:0], P[7:0], Y[7:0], X[7:0], A[7:0]}.
-		cpu_regs_out       : OUT STD_LOGIC_VECTOR(63 DOWNTO 0);
-		via_orb_out        : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_ora_out        : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_ddrb_out       : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_ddra_out       : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_t1l_l_out      : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_t1l_h_out      : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_t2l_l_out      : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_t2l_h_out      : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_sr_out         : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_acr_out        : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_pcr_out        : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_ier_out        : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_ifr_out        : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-		via_t1c_out        : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-		via_t2c_out        : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-		via_t1_active_out  : OUT STD_LOGIC;
-		via_t2_active_out  : OUT STD_LOGIC;
-		ay_regs_out        : OUT STD_LOGIC_VECTOR(119 DOWNTO 0);
-		ay_creg_out        : OUT STD_LOGIC_VECTOR(3 DOWNTO 0);
-		ula_mode_out       : OUT STD_LOGIC_VECTOR(2 DOWNTO 0);
-
 		-- Tape-load live ROM patch: when patch_active='1', the CPU
 		-- reads patch_data instead of the selected ROM source.
 		patch_active    : IN  STD_LOGIC := '0';
@@ -363,9 +339,7 @@ COMPONENT psg
 			snap_addr    : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
 			snap_data    : IN STD_LOGIC_VECTOR(7 DOWNTO 0);
 			snap_creg_we : IN STD_LOGIC;
-			snap_creg    : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
-			regs_out     : OUT STD_LOGIC_VECTOR(119 DOWNTO 0);
-			creg_out     : OUT STD_LOGIC_VECTOR(3 DOWNTO 0)
+			snap_creg    : IN STD_LOGIC_VECTOR(3 DOWNTO 0)
 );
 END COMPONENT;
 
@@ -426,7 +400,7 @@ BEGIN
 			A => cpu_ad,
 			DI => cpu_di,
 			DO => cpu_do,
-			Regs => cpu_regs_out,
+			Regs => OPEN,
 			Regs_set => cpu_regs_set,
 			Regs_set_we => cpu_regs_set_we
 		);
@@ -502,7 +476,6 @@ BEGIN
 			CSRAMn => ula_CSRAMn,
 			SNAP_MODE_WE => ula_snap_mode_we,
 			SNAP_MODE => ula_snap_mode,
-			SNAP_MODE_OUT => ula_mode_out,
 			R => VIDEO_R,
 			G => VIDEO_G,
 			B => VIDEO_B,
@@ -561,24 +534,7 @@ BEGIN
 			snap_t1_active   => via_snap_t1_active,
 			snap_t2_active   => via_snap_t2_active,
 			snap_ifr_we      => via_snap_ifr_we,
-			snap_ifr_data    => via_snap_ifr_data,
-			snap_orb_out       => via_orb_out,
-			snap_ora_out       => via_ora_out,
-			snap_ddrb_out      => via_ddrb_out,
-			snap_ddra_out      => via_ddra_out,
-			snap_t1l_l_out     => via_t1l_l_out,
-			snap_t1l_h_out     => via_t1l_h_out,
-			snap_t2l_l_out     => via_t2l_l_out,
-			snap_t2l_h_out     => via_t2l_h_out,
-			snap_sr_out        => via_sr_out,
-			snap_acr_out       => via_acr_out,
-			snap_pcr_out       => via_pcr_out,
-			snap_ier_out       => via_ier_out,
-			snap_ifr_out       => via_ifr_out,
-			snap_t1c_out       => via_t1c_out,
-			snap_t2c_out       => via_t2c_out,
-			snap_t1_active_out => via_t1_active_out,
-			snap_t2_active_out => via_t2_active_out
+			snap_ifr_data    => via_snap_ifr_data
 		);
 
 
@@ -608,9 +564,7 @@ BEGIN
       snap_addr    => ay_snap_addr,
       snap_data    => ay_snap_data,
       snap_creg_we => ay_snap_creg_we,
-      snap_creg    => ay_snap_creg,
-      regs_out     => ay_regs_out,
-      creg_out     => ay_creg_out
+      snap_creg    => ay_snap_creg
     );
 
 	
