@@ -94,6 +94,7 @@ if [[ ${#MACROS[@]} -gt 0 ]]; then
         -v "${REPO_ROOT}:/build" \
         -v "${MACROS_TCL}:/tmp/oric_macros.tcl" \
         -w /build \
+        --name oric_build \
         "${DOCKER_IMAGE}" \
         bash -c "quartus_sh -t /tmp/oric_macros.tcl && quartus_sh --flow compile ${QPF_FILE}"
 else
@@ -101,6 +102,7 @@ else
         --user "$(id -u):$(id -g)" \
         -v "${REPO_ROOT}:/build" \
         -w /build \
+        --name oric_build \
         "${DOCKER_IMAGE}" \
         quartus_sh --flow compile "${QPF_FILE}"
 fi
