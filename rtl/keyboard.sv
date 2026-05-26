@@ -87,6 +87,8 @@ always @(posedge clk_sys) begin
 	if(reset) begin
 		sw2_pravetz_quote <= 1'b0;
 		swls_pravetz_quote <= 1'b0;
+		swrst <= 1'b0;
+		swnmi <= 1'b0;
 	end
 	else if(key_strobe) begin
 		case(key_code)
