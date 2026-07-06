@@ -443,18 +443,24 @@ begin
 		end if;
 	end process;
 
-	u_ld_reg: process(CLK_24, lRELOAD_SEL, RESET_INT)
+	u_ld_reg: process(CLK_24, RESET_INT)
 	begin
 	  if (RESET_INT = '1') then
 		  lREG_INK   <= (others=>'1');
 		  lREG_STYLE <= (others=>'0');
 		  lREG_PAPER <= (others=>'0');
 		  lREG_MODE  <= (others=>'0');
-	  elsif (lRELOAD_SEL = '1') then
-		  lREG_INK   <= (others=>'1');
-		  lREG_STYLE <= (others=>'0');
-		  lREG_PAPER <= (others=>'0');
 	  elsif rising_edge(CLK_24) then
+			-- Synchronous attribute reload during blanking (lCTR_H >= 49).
+			-- Must NOT be an async clear: lRELOAD_SEL is decoded from the
+			-- binary counter lCTR_H and glitches at the 31->32 transition,
+			-- which wiped attributes for the last 8 visible columns on
+			-- placement-unlucky builds.
+			if (lRELOAD_SEL = '1') then
+				lREG_INK   <= (others=>'1');
+				lREG_STYLE <= (others=>'0');
+				lREG_PAPER <= (others=>'0');
+			end if;
 			if (SNAP_MODE_WE = '1') then
 				lREG_MODE <= SNAP_MODE;
 			elsif (RELD_REG = '1' and isAttrib = '1' and BLANKINGn = '1') then
